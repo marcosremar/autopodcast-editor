@@ -1,0 +1,86 @@
+# ============================================
+# AeroPod - Development Environment with VS Code
+# ============================================
+
+FROM ubuntu:22.04
+
+# Avoid prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    sudo \
+    vim \
+    nano \
+    htop \
+    openssh-server \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    build-essential \
+    python3 \
+    python3-pip \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install code-server (VS Code in browser)
+RUN curl -fsSL https://code-server.dev/install.sh | sh
+
+# Create ubuntu user with sudo privileges
+RUN useradd -m -s /bin/bash -G sudo ubuntu \
+    && echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers \
+    && echo "ubuntu:ubuntu" | chpasswd
+
+# Set working directory
+WORKDIR /home/ubuntu/aeropod
+
+# Copy project files
+COPY --chown=ubuntu:ubuntu . .
+
+# Install project dependencies as ubuntu user
+USER ubuntu
+RUN npm ci --legacy-peer-deps
+
+# Switch back to root for final config
+USER root
+
+# Create code-server config
+RUN mkdir -p /home/ubuntu/.config/code-server \
+    && chown -R ubuntu:ubuntu /home/ubuntu/.config
+
+# Code-server configuration
+RUN echo 'bind-addr: 0.0.0.0:8080\n\
+auth: password\n\
+password: aeropod2024\n\
+cert: false' > /home/ubuntu/.config/code-server/config.yaml \
+    && chown ubuntu:ubuntu /home/ubuntu/.config/code-server/config.yaml
+
+# Install useful VS Code extensions
+USER ubuntu
+RUN code-server --install-extension dbaeumer.vscode-eslint \
+    && code-server --install-extension esbenp.prettier-vscode \
+    && code-server --install-extension bradlc.vscode-tailwindcss \
+    && code-server --install-extension prisma.prisma
+
+USER root
+
+# Expose ports
+# 8080 = code-server (VS Code)
+# 3000 = Next.js dev server
+EXPOSE 8080 3000
+
+# Create startup script
+RUN echo '#!/bin/bash\n\
+su - ubuntu -c "cd /home/ubuntu/aeropod && code-server --bind-addr 0.0.0.0:8080 /home/ubuntu/aeropod" &\n\
+tail -f /dev/null' > /start.sh \
+    && chmod +x /start.sh
+
+CMD ["/start.sh"]

@@ -1,0 +1,37 @@
+# ============================================
+# AeroPod - Development Environment
+# ============================================
+# App: aeropod.dumontai.com
+# VS Code: vscode.aeropod.dumontai.com
+# ============================================
+
+services:
+  vscode:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: aeropod-vscode
+    restart: unless-stopped
+    volumes:
+      - aeropod-code:/home/ubuntu/aeropod
+    networks:
+      - coolify
+    labels:
+      - traefik.enable=true
+      # HTTP redirect to HTTPS
+      - traefik.http.routers.aeropod-vscode-http.entryPoints=http
+      - traefik.http.routers.aeropod-vscode-http.rule=Host(`vscode.aeropod.dumontai.com`)
+      - traefik.http.routers.aeropod-vscode-http.middlewares=redirect-to-https
+      # HTTPS
+      - traefik.http.routers.aeropod-vscode.entryPoints=https
+      - traefik.http.routers.aeropod-vscode.rule=Host(`vscode.aeropod.dumontai.com`)
+      - traefik.http.routers.aeropod-vscode.tls=true
+      - traefik.http.routers.aeropod-vscode.tls.certresolver=letsencrypt
+      - traefik.http.services.aeropod-vscode.loadbalancer.server.port=8080
+
+volumes:
+  aeropod-code:
+
+networks:
+  coolify:
+    external: true
