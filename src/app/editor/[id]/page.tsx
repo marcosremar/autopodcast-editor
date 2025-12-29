@@ -2,11 +2,9 @@
 
 import { useState, useEffect, use, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
 import { Project, Segment } from "@/lib/db/schema";
-import { CompactPlayer, CompactPlayerRef } from "@/components/editor/CompactPlayer";
 import { ChatEditor } from "@/components/editor/ChatEditor";
-import { AdvancedTimeline, AdvancedTimelineRef } from "@/components/editor/AdvancedTimeline";
+import { AdvancedTimeline, AdvancedTimelineRef, PreviewRange } from "@/components/editor/AdvancedTimeline";
 import { ExportButton } from "@/components/editor/ExportButton";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,8 +16,6 @@ import {
   RefreshCw,
   Sparkles,
   Save,
-  LayoutGrid,
-  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,12 +23,9 @@ interface EditorPageProps {
   params: Promise<{ id: string }>;
 }
 
-type ViewMode = "chat" | "timeline";
-
 export default function EditorPage({ params }: EditorPageProps) {
   const resolvedParams = use(params);
   const router = useRouter();
-  const playerRef = useRef<CompactPlayerRef>(null);
   const timelineRef = useRef<AdvancedTimelineRef>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -40,7 +33,7 @@ export default function EditorPage({ params }: EditorPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>("chat");
+  const [previewRange, setPreviewRange] = useState<PreviewRange | undefined>(undefined);
 
   // Fetch project and segments
   useEffect(() => {
@@ -115,6 +108,15 @@ export default function EditorPage({ params }: EditorPageProps) {
     );
   };
 
+  // Handler para selecionar/deselecionar multiplos segmentos (range selection)
+  const handleSelectRange = (segmentIds: string[], select: boolean) => {
+    setSegments((prev) =>
+      prev.map((seg) =>
+        segmentIds.includes(seg.id) ? { ...seg, isSelected: select } : seg
+      )
+    );
+  };
+
   // Handler para acoes do chat
   const handleChatAction = (action: { type: string; segmentIds?: string[]; message: string }) => {
     if (!action.segmentIds || action.segmentIds.length === 0) {
@@ -134,6 +136,11 @@ export default function EditorPage({ params }: EditorPageProps) {
               : seg
           )
         );
+        // Ativar preview para mostrar os segmentos sendo selecionados
+        setPreviewRange({
+          segmentIds: action.segmentIds,
+          label: action.message || `${action.segmentIds.length} segmentos`,
+        });
         break;
       case "deselect":
         setSegments((prev) =>
@@ -145,14 +152,24 @@ export default function EditorPage({ params }: EditorPageProps) {
         );
         break;
       case "focus":
-        // Play the first segment
+        // Ativar preview mode para mostrar os segmentos mencionados
+        setPreviewRange({
+          segmentIds: action.segmentIds,
+          label: action.message || `${action.segmentIds.length} segmentos`,
+        });
+        // Play the first segment using timeline
         const firstSegmentId = action.segmentIds[0];
         const segment = segments.find(s => s.id === firstSegmentId);
-        if (segment && playerRef.current) {
-          playerRef.current.playSegment(segment);
+        if (segment && timelineRef.current) {
+          timelineRef.current.playSegment(segment);
         }
         break;
     }
+  };
+
+  // Handler para fechar preview
+  const handlePreviewClose = () => {
+    setPreviewRange(undefined);
   };
 
   const handleReprocess = async () => {
@@ -302,34 +319,6 @@ export default function EditorPage({ params }: EditorPageProps) {
             </div>
 
             <div className="flex items-center gap-2">
-              {/* View Mode Toggle */}
-              <div className="flex items-center bg-zinc-800 rounded-lg p-1 mr-2">
-                <button
-                  onClick={() => setViewMode("chat")}
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
-                    viewMode === "chat"
-                      ? "bg-emerald-500 text-white"
-                      : "text-zinc-400 hover:text-white"
-                  )}
-                >
-                  <MessageSquare className="h-3.5 w-3.5" />
-                  Chat
-                </button>
-                <button
-                  onClick={() => setViewMode("timeline")}
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
-                    viewMode === "timeline"
-                      ? "bg-emerald-500 text-white"
-                      : "text-zinc-400 hover:text-white"
-                  )}
-                >
-                  <LayoutGrid className="h-3.5 w-3.5" />
-                  Timeline
-                </button>
-              </div>
-
               <Button
                 variant="ghost"
                 size="sm"
@@ -353,41 +342,37 @@ export default function EditorPage({ params }: EditorPageProps) {
         </div>
       </header>
 
-      {/* Compact Player - Always visible at top */}
-      <div className="shrink-0 px-4 py-3 border-b border-zinc-800">
-        <CompactPlayer
-          ref={playerRef}
-          segments={segments}
-          audioUrl={project.originalAudioUrl}
-          onToggleSelect={handleToggleSelect}
-        />
-      </div>
+      {/* Main Content - Timeline + Chat unified */}
+      <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
+        {/* Timeline Section */}
+        <div className="shrink-0 border-b border-zinc-800">
+          <AdvancedTimeline
+            ref={timelineRef}
+            segments={segments}
+            audioUrl={project.originalAudioUrl}
+            onToggleSelect={handleToggleSelect}
+            onSelectRange={handleSelectRange}
+            previewRange={previewRange}
+            onPreviewClose={handlePreviewClose}
+            className="rounded-none border-0"
+          />
+        </div>
 
-      {/* Main Content - Chat or Timeline based on viewMode */}
-      <main className="flex-1 min-h-0 overflow-hidden">
-        {viewMode === "chat" ? (
+        {/* Chat Section */}
+        <div className="flex-1 min-h-0">
           <ChatEditor
             projectId={project.id}
             segments={segments}
             onAction={handleChatAction}
-            onPlaySegment={(segment) => playerRef.current?.playSegment(segment)}
+            onPlaySegment={(segment) => timelineRef.current?.playSegment(segment)}
+            onSetPreview={(segmentIds, label) => {
+              setPreviewRange({
+                segmentIds,
+                label,
+              });
+            }}
           />
-        ) : (
-          <div className="h-full overflow-auto p-4">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3 }}
-            >
-              <AdvancedTimeline
-                ref={timelineRef}
-                segments={segments}
-                audioUrl={project.originalAudioUrl}
-                onToggleSelect={handleToggleSelect}
-              />
-            </motion.div>
-          </div>
-        )}
+        </div>
       </main>
     </div>
   );

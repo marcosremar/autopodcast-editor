@@ -1,13 +1,13 @@
 /**
  * Servico de Chat para Edicao de Podcast
  *
- * Usa OpenRouter para processar comandos de edicao em linguagem natural
+ * Usa Anthropic Claude para processar comandos de edicao em linguagem natural
  */
 
 import { getSemanticSearchService, SegmentWithEmbedding } from "./semantic-search";
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "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";
-const CHAT_MODEL = "qwen/qwen-2.5-72b-instruct";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const CHAT_MODEL = "claude-sonnet-4-20250514";
 
 export interface Segment {
   id: string;
@@ -39,7 +39,7 @@ export class EditorChatService {
   private searchService = getSemanticSearchService();
 
   constructor(options?: { apiKey?: string; model?: string }) {
-    this.apiKey = options?.apiKey || OPENROUTER_API_KEY;
+    this.apiKey = options?.apiKey || ANTHROPIC_API_KEY || "";
     this.model = options?.model || CHAT_MODEL;
   }
 
@@ -55,53 +55,100 @@ export class EditorChatService {
     const selectedSegments = segments.filter(s => s.isSelected);
     const unselectedSegments = segments.filter(s => !s.isSelected);
 
+    // Calcular estatisticas do podcast
+    const totalDuration = segments.reduce((sum, s) => sum + (s.endTime - s.startTime), 0);
+    const editedDuration = selectedSegments.reduce((sum, s) => sum + (s.endTime - s.startTime), 0);
+    const reduction = totalDuration > 0 ? Math.round((1 - editedDuration / totalDuration) * 100) : 0;
+    const avgScore = segments.length > 0
+      ? (segments.reduce((sum, s) => sum + (s.interestScore || 0), 0) / segments.length).toFixed(1)
+      : "0";
+    const lowScoreSegments = segments.filter(s => (s.interestScore || 0) < 5);
+    const highScoreSegments = segments.filter(s => (s.interestScore || 0) >= 7);
+    const topics = [...new Set(segments.map(s => s.topic).filter(Boolean))];
+
     // Busca semantica se a mensagem parece uma busca
     let searchResults: { id: string; text: string; score: number }[] = [];
-    const searchKeywords = ["sobre", "fala de", "menciona", "parte que", "trecho", "onde", "quando"];
-    const isSearchQuery = searchKeywords.some(kw => userMessage.toLowerCase().includes(kw));
+    const searchKeywords = ["sobre", "fala de", "menciona", "parte que", "trecho", "onde", "quando", "foca", "focando", "IA", "inteligência"];
+    const isSearchQuery = searchKeywords.some(kw => userMessage.toLowerCase().includes(kw.toLowerCase()));
 
     if (isSearchQuery) {
-      const searchSegments: SegmentWithEmbedding[] = segments.map(s => ({
-        id: s.id,
-        text: s.text,
-        topic: s.topic || undefined,
-        startTime: s.startTime,
-        endTime: s.endTime,
-      }));
+      try {
+        const searchSegments: SegmentWithEmbedding[] = segments.map(s => ({
+          id: s.id,
+          text: s.text,
+          topic: s.topic || undefined,
+          startTime: s.startTime,
+          endTime: s.endTime,
+        }));
 
-      searchResults = await this.searchService.search(userMessage, searchSegments, {
-        topK: 5,
-        minScore: 0.4,
-      });
+        searchResults = await this.searchService.search(userMessage, searchSegments, {
+          topK: 5,
+          minScore: 0.4,
+        });
+      } catch (searchError) {
+        console.error("Search error (continuing without search results):", searchError);
+        // Continua sem resultados de busca
+      }
     }
+
+    // Formatar duracao em minutos:segundos
+    const formatDuration = (seconds: number) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}:${secs.toString().padStart(2, "0")}`;
+    };
 
     // Construir prompt do sistema
     const systemPrompt = `Voce e um assistente de edicao de podcast. O usuario pode te pedir para:
 - Selecionar/deselecionar segmentos especificos
 - Focar em determinados topicos (selecionar mais segmentos relacionados)
 - Remover partes sobre determinado assunto
-- Adicionar transicoes entre secoes
-- Reorganizar a ordem dos segmentos
+- Dar sugestoes de como melhorar a edicao
+- Analisar a qualidade atual da edicao
 - Responder perguntas sobre o conteudo
 
-SEGMENTOS SELECIONADOS (${selectedSegments.length}):
-${selectedSegments.map((s, i) => `[${i}] ID:${s.id} | ${s.startTime.toFixed(1)}s | ${s.topic || "Sem topico"} | "${s.text.substring(0, 100)}..."`).join("\n")}
+=== ESTATISTICAS DO PODCAST ===
+- Duracao original: ${formatDuration(totalDuration)}
+- Duracao editada: ${formatDuration(editedDuration)} (reducao de ${reduction}%)
+- Total de segmentos: ${segments.length}
+- Segmentos selecionados: ${selectedSegments.length}
+- Score medio de interesse: ${avgScore}/10
+- Segmentos de baixo interesse (score < 5): ${lowScoreSegments.length}
+- Segmentos de alto interesse (score >= 7): ${highScoreSegments.length}
+- Topicos encontrados: ${topics.length > 0 ? topics.slice(0, 5).join(", ") : "Nenhum topico identificado"}
 
-SEGMENTOS NAO SELECIONADOS (${unselectedSegments.length}):
-${unselectedSegments.slice(0, 20).map((s, i) => `[${i}] ID:${s.id} | ${s.startTime.toFixed(1)}s | ${s.topic || "Sem topico"} | "${s.text.substring(0, 100)}..."`).join("\n")}
-${unselectedSegments.length > 20 ? `\n... e mais ${unselectedSegments.length - 20} segmentos` : ""}
+=== SEGMENTOS SELECIONADOS (${selectedSegments.length}) ===
+${selectedSegments.slice(0, 15).map((s, i) => `[${i}] ID:${s.id} | ${s.startTime.toFixed(1)}s | Score:${s.interestScore || 0} | ${s.topic || "Sem topico"} | "${s.text.substring(0, 80)}..."`).join("\n")}
+${selectedSegments.length > 15 ? `\n... e mais ${selectedSegments.length - 15} segmentos selecionados` : ""}
+
+=== SEGMENTOS NAO SELECIONADOS (${unselectedSegments.length}) ===
+${unselectedSegments.slice(0, 15).map((s, i) => `[${i}] ID:${s.id} | ${s.startTime.toFixed(1)}s | Score:${s.interestScore || 0} | ${s.topic || "Sem topico"} | "${s.text.substring(0, 80)}..."`).join("\n")}
+${unselectedSegments.length > 15 ? `\n... e mais ${unselectedSegments.length - 15} segmentos nao selecionados` : ""}
 
 ${searchResults.length > 0 ? `
-RESULTADOS DA BUSCA SEMANTICA para "${userMessage}":
+=== RESULTADOS DA BUSCA SEMANTICA ===
+Query: "${userMessage}"
 ${searchResults.map((r, i) => `[${i}] ID:${r.id} | Score:${r.score.toFixed(2)} | "${r.text.substring(0, 150)}..."`).join("\n")}
 ` : ""}
 
+=== INSTRUCOES ===
 Responda em portugues de forma natural e amigavel.
+
+IMPORTANTE: Quando o usuario perguntar sobre partes do podcast (ex: "qual parte fala de IA?", "onde menciona X?"), voce DEVE:
+1. Analisar os segmentos acima e os resultados da busca semantica
+2. Identificar os segmentos relevantes
+3. Retornar uma acao "focus" com os IDs dos segmentos para que sejam destacados na timeline
+
+Quando o usuario perguntar "como posso melhorar?" ou pedir sugestoes:
+1. Analise as estatisticas acima
+2. Identifique oportunidades de melhoria (ex: segmentos de baixo interesse selecionados, segmentos de alto interesse nao selecionados)
+3. Sugira acoes concretas com os IDs dos segmentos
+
 Quando sugerir acoes, retorne um JSON no formato:
 \`\`\`json
 {
   "actions": [
-    {"type": "select|deselect|focus|remove_topic|info", "segmentIds": ["id1", "id2"], "message": "descricao da acao"}
+    {"type": "select|deselect|focus|info", "segmentIds": ["id1", "id2"], "message": "descricao da acao"}
   ]
 }
 \`\`\`
@@ -109,11 +156,10 @@ Quando sugerir acoes, retorne um JSON no formato:
 Tipos de acao:
 - select: selecionar segmentos para incluir na edicao
 - deselect: remover segmentos da edicao
-- focus: destacar segmentos para o usuario ver
-- remove_topic: remover todos segmentos sobre um topico
-- info: apenas informar algo, sem acao
+- focus: destacar segmentos para o usuario ver/ouvir (USE ISSO quando o usuario perguntar sobre partes especificas!)
+- info: apenas informar algo, sem acao de edicao
 
-Se nao houver acoes, apenas responda normalmente sem o bloco JSON.`;
+Se nao houver acoes de edicao, apenas responda normalmente sem o bloco JSON.`;
 
     // Construir historico de conversa
     const messages = [
@@ -125,20 +171,22 @@ Se nao houver acoes, apenas responda normalmente sem o bloco JSON.`;
       { role: "user", content: userMessage },
     ];
 
-    // Chamar API
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    // Chamar API Anthropic
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${this.apiKey}`,
-        "HTTP-Referer": "https://autopodcast.app",
-        "X-Title": "AutoPodcast Editor",
+        "x-api-key": this.apiKey,
+        "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
         model: this.model,
-        messages,
-        temperature: 0.7,
         max_tokens: 1000,
+        system: messages[0].content,
+        messages: messages.slice(1).map(m => ({
+          role: m.role,
+          content: m.content,
+        })),
       }),
     });
 
@@ -148,7 +196,7 @@ Se nao houver acoes, apenas responda normalmente sem o bloco JSON.`;
     }
 
     const data = await response.json();
-    const assistantMessage = data.choices[0]?.message?.content || "";
+    const assistantMessage = data.content?.[0]?.text || "";
 
     // Extrair acoes do JSON se houver
     const actions: EditAction[] = [];

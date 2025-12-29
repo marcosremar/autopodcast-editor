@@ -45,9 +45,10 @@ interface ChatEditorProps {
   segments: Segment[];
   onAction: (action: EditAction) => void;
   onPlaySegment?: (segment: Segment) => void;
+  onSetPreview?: (segmentIds: string[], label?: string) => void;
 }
 
-export function ChatEditor({ projectId, segments, onAction, onPlaySegment }: ChatEditorProps) {
+export function ChatEditor({ projectId, segments, onAction, onPlaySegment, onSetPreview }: ChatEditorProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
@@ -192,6 +193,27 @@ export function ChatEditor({ projectId, segments, onAction, onPlaySegment }: Cha
       };
 
       setMessages(prev => prev.map(m => m.id === streamingId ? assistantMessage : m));
+
+      // Ativar preview automaticamente quando a IA menciona segmentos
+      if (onSetPreview && data.actions && data.actions.length > 0) {
+        const allSegmentIds: string[] = [];
+        let previewLabel = "";
+
+        for (const action of data.actions) {
+          if (action.segmentIds && action.segmentIds.length > 0) {
+            allSegmentIds.push(...action.segmentIds);
+            if (!previewLabel && action.message) {
+              previewLabel = action.message;
+            }
+          }
+        }
+
+        // Se tiver segmentos mencionados, ativar preview
+        if (allSegmentIds.length > 0) {
+          const uniqueIds = [...new Set(allSegmentIds)];
+          onSetPreview(uniqueIds, previewLabel || `${uniqueIds.length} segmentos mencionados`);
+        }
+      }
     } catch (error) {
       console.error("Chat error:", error);
       setMessages(prev => prev.map(m =>

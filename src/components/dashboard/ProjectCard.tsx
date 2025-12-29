@@ -20,6 +20,8 @@ type ProjectStatus =
   | "transcribing"
   | "analyzing"
   | "ready"
+  | "completed"
+  | "failed"
   | "error"
 
 interface Project {
@@ -44,12 +46,15 @@ const statusConfig: Record<
   transcribing: { variant: "secondary", label: "Transcribing" },
   analyzing: { variant: "secondary", label: "Analyzing" },
   ready: { variant: "default", label: "Ready" },
+  completed: { variant: "default", label: "Completed" },
+  failed: { variant: "destructive", label: "Failed" },
   error: { variant: "destructive", label: "Error" },
 }
 
-function formatDuration(seconds: number): string {
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds == null || isNaN(seconds)) return "0:00"
   const minutes = Math.floor(seconds / 60)
-  const remainingSeconds = seconds % 60
+  const remainingSeconds = Math.floor(seconds % 60)
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`
 }
 
@@ -77,7 +82,7 @@ function formatDate(dateString: string): string {
 export function ProjectCard({ project, onDelete }: ProjectCardProps) {
   const router = useRouter()
   const [isDeleting, setIsDeleting] = useState(false)
-  const statusInfo = statusConfig[project.status]
+  const statusInfo = statusConfig[project.status as ProjectStatus] || { variant: "outline" as const, label: project.status || "Unknown" }
   const isProcessing = ["uploading", "transcribing", "analyzing"].includes(
     project.status
   )
@@ -99,10 +104,12 @@ export function ProjectCard({ project, onDelete }: ProjectCardProps) {
   }
 
   const handleClick = () => {
-    if (project.status === "ready") {
+    if (project.status === "ready" || project.status === "completed") {
       router.push(`/editor/${project.id}`)
     }
   }
+
+  const isClickable = project.status === "ready" || project.status === "completed"
 
   return (
     <motion.div
@@ -112,12 +119,12 @@ export function ProjectCard({ project, onDelete }: ProjectCardProps) {
       exit={{ opacity: 0, scale: 0.9 }}
       transition={{ duration: 0.3 }}
       whileHover={
-        project.status === "ready" ? { scale: 1.02, transition: { duration: 0.2 } } : {}
+        isClickable ? { scale: 1.02, transition: { duration: 0.2 } } : {}
       }
     >
       <Card
         className={`relative transition-all ${
-          project.status === "ready"
+          isClickable
             ? "cursor-pointer hover:shadow-lg"
             : "opacity-75"
         } ${isDeleting ? "opacity-50 pointer-events-none" : ""}`}
