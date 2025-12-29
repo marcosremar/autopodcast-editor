@@ -21,6 +21,7 @@ export const waitlist = pgTable("waitlist", {
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: varchar("email", { length: 255 }).notNull().unique(),
+  password: varchar("password", { length: 255 }).notNull(),
   name: varchar("name", { length: 255 }),
   plan: varchar("plan", { length: 50 }).default("free"),
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),

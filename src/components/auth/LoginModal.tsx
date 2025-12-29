@@ -13,6 +13,7 @@ interface LoginModalProps {
 
 export function LoginModal({ isOpen, onClose, onSuccess }: LoginModalProps) {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -29,7 +30,7 @@ export function LoginModal({ isOpen, onClose, onSuccess }: LoginModalProps) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, password }),
       });
 
       const data = await response.json();
@@ -38,7 +39,6 @@ export function LoginModal({ isOpen, onClose, onSuccess }: LoginModalProps) {
         throw new Error(data.error || "Failed to login");
       }
 
-      // Success - for MVP, auto-login is complete
       onSuccess?.();
       onClose();
     } catch (err) {
@@ -72,7 +72,7 @@ export function LoginModal({ isOpen, onClose, onSuccess }: LoginModalProps) {
             Welcome to AeroPod
           </h2>
           <p className="text-gray-600 dark:text-gray-400 text-sm">
-            Enter your email to get started
+            Sign in to your account
           </p>
         </div>
 
@@ -97,6 +97,25 @@ export function LoginModal({ isOpen, onClose, onSuccess }: LoginModalProps) {
             />
           </div>
 
+          <div>
+            <label
+              htmlFor="password"
+              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+            >
+              Password
+            </label>
+            <Input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+              disabled={isLoading}
+              className="w-full"
+            />
+          </div>
+
           {error && (
             <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-3 rounded-md">
               {error}
@@ -108,14 +127,9 @@ export function LoginModal({ isOpen, onClose, onSuccess }: LoginModalProps) {
             disabled={isLoading}
             className="w-full"
           >
-            {isLoading ? "Logging in..." : "Continue"}
+            {isLoading ? "Signing in..." : "Sign In"}
           </Button>
         </form>
-
-        {/* Footer */}
-        <p className="mt-4 text-xs text-center text-gray-500 dark:text-gray-400">
-          For MVP, you'll be logged in automatically. In production, we'll send you a magic link.
-        </p>
       </div>
     </div>
   );

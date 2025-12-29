@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getOrCreateUser, setSession } from "@/lib/auth/session";
+import bcrypt from "bcryptjs";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
+import { setSession } from "@/lib/auth/session";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
-  name: z.string().optional(),
+  password: z.string().min(1, "Password is required"),
 });
 
 export async function POST(request: NextRequest) {
@@ -15,16 +19,35 @@ export async function POST(request: NextRequest) {
     const result = loginSchema.safeParse(body);
     if (!result.success) {
       return NextResponse.json(
-        { error: "Invalid email address" },
+        { error: "Email and password are required" },
         { status: 400 }
       );
     }
 
-    const { email, name } = result.data;
+    const { email, password } = result.data;
 
-    // For MVP: Auto-login without sending email
-    // In production, this would send a magic link email
-    const user = await getOrCreateUser(email, name);
+    // Find user by email
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+
+    if (!user) {
+      return NextResponse.json(
+        { error: "Invalid email or password" },
+        { status: 401 }
+      );
+    }
+
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      return NextResponse.json(
+        { error: "Invalid email or password" },
+        { status: 401 }
+      );
+    }
 
     // Create session
     await setSession({
