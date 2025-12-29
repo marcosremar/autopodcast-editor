@@ -60,7 +60,7 @@ RUN mkdir -p /home/ubuntu/.config/code-server \
 # Code-server configuration
 RUN echo 'bind-addr: 0.0.0.0:8080\n\
 auth: password\n\
-password: aeropod2024\n\
+password: Marcos+123\n\
 cert: false' > /home/ubuntu/.config/code-server/config.yaml \
     && chown ubuntu:ubuntu /home/ubuntu/.config/code-server/config.yaml
 
