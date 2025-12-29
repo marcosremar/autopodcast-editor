@@ -297,7 +297,7 @@ export function HorizontalTimeline({
         <div className="relative h-16 bg-zinc-900 rounded-lg overflow-hidden">
           {segments.map((segment) => {
             const width = ((segment.endTime - segment.startTime) / originalDuration) * 100;
-            const isSelected = segment.isSelected;
+            const isSelected = segment.isSelected ?? false;
 
             return (
               <motion.div

@@ -161,7 +161,7 @@ export class GroqTranscriptionService implements TranscriptionService {
       const audioData = await this.fetchAudioData(options.audioUrl);
 
       const transcription = await this.client.audio.transcriptions.create({
-        file: new File([audioData], 'audio.mp3', { type: 'audio/mpeg' }),
+        file: new File([new Uint8Array(audioData)], 'audio.mp3', { type: 'audio/mpeg' }),
         model: 'whisper-large-v3',
         response_format: 'verbose_json',
         language: options.language || 'pt',

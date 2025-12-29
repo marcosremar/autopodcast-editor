@@ -253,7 +253,7 @@ async function transcribeAudio(groq: Groq, audioUrl: string): Promise<Transcript
   }
 
   const transcription = await groq.audio.transcriptions.create({
-    file: new File([audioData], "audio.mp3", { type: "audio/mpeg" }),
+    file: new File([new Uint8Array(audioData)], "audio.mp3", { type: "audio/mpeg" }),
     model: "whisper-large-v3",
     response_format: "verbose_json",
     language: "pt",
