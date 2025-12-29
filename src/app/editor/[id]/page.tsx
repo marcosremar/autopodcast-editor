@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { Project, Segment } from "@/lib/db/schema";
 import { CompactPlayer, CompactPlayerRef } from "@/components/editor/CompactPlayer";
 import { ChatEditor } from "@/components/editor/ChatEditor";
+import { AdvancedTimeline, AdvancedTimelineRef } from "@/components/editor/AdvancedTimeline";
 import { ExportButton } from "@/components/editor/ExportButton";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +33,7 @@ export default function EditorPage({ params }: EditorPageProps) {
   const resolvedParams = use(params);
   const router = useRouter();
   const playerRef = useRef<CompactPlayerRef>(null);
+  const timelineRef = useRef<AdvancedTimelineRef>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -372,235 +374,21 @@ export default function EditorPage({ params }: EditorPageProps) {
           />
         ) : (
           <div className="h-full overflow-auto p-4">
-            {/* Timeline View - Import the old HorizontalTimeline for this */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3 }}
             >
-              <TimelineView
+              <AdvancedTimeline
+                ref={timelineRef}
                 segments={segments}
+                audioUrl={project.originalAudioUrl}
                 onToggleSelect={handleToggleSelect}
-                onPlaySegment={(segment) => playerRef.current?.playSegment(segment)}
               />
             </motion.div>
           </div>
         )}
       </main>
-    </div>
-  );
-}
-
-// Timeline View Component (simplified from HorizontalTimeline)
-function TimelineView({
-  segments,
-  onToggleSelect,
-  onPlaySegment,
-}: {
-  segments: Segment[];
-  onToggleSelect: (segmentId: string) => void;
-  onPlaySegment: (segment: Segment) => void;
-}) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [activeFilters, setActiveFilters] = useState<string[]>([]);
-
-  type FilterType = "selected" | "good" | "tangent" | "repetition" | "error" | "low-interest";
-  const filterOptions: { key: FilterType; label: string; color: string; bgColor: string }[] = [
-    { key: "selected", label: "Selecionados", color: "text-emerald-400", bgColor: "bg-emerald-500" },
-    { key: "good", label: "Bons", color: "text-blue-400", bgColor: "bg-blue-500" },
-    { key: "tangent", label: "Tangentes", color: "text-amber-400", bgColor: "bg-amber-500" },
-    { key: "repetition", label: "Repeticoes", color: "text-yellow-400", bgColor: "bg-yellow-500" },
-    { key: "error", label: "Erros", color: "text-red-400", bgColor: "bg-red-500" },
-    { key: "low-interest", label: "Baixo Interesse", color: "text-zinc-400", bgColor: "bg-zinc-600" },
-  ];
-
-  const toggleFilter = (filter: string) => {
-    setActiveFilters(prev =>
-      prev.includes(filter)
-        ? prev.filter(f => f !== filter)
-        : [...prev, filter]
-    );
-  };
-
-  const getSegmentStatus = (segment: Segment) => {
-    const analysis = segment.analysis as any;
-    if (analysis?.isTangent) return "tangent";
-    if (analysis?.isRepetition) return "repetition";
-    if (analysis?.hasFactualError || analysis?.hasContradiction) return "error";
-    if ((segment.interestScore || 0) < 5) return "low-interest";
-    return "good";
-  };
-
-  const getStatusLabel = (segment: Segment) => {
-    const analysis = segment.analysis as any;
-    if (analysis?.isTangent) return "Tangente";
-    if (analysis?.isRepetition) return "Repetido";
-    if (analysis?.hasFactualError) return "Erro factual";
-    if (analysis?.hasContradiction) return "Contradiz";
-    if ((segment.interestScore || 0) < 5) return "Baixo interesse";
-    return "OK";
-  };
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  };
-
-  return (
-    <div className="bg-zinc-900 rounded-xl border border-zinc-800">
-      {/* Search and Filters */}
-      <div className="p-4 border-b border-zinc-800">
-        <div className="relative mb-4">
-          <input
-            type="text"
-            placeholder="Buscar por texto, topico..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-10 pr-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors"
-          />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {filterOptions.map((filter) => {
-            const isActive = activeFilters.includes(filter.key);
-            const count = segments.filter(s => {
-              if (filter.key === "selected") return s.isSelected;
-              return getSegmentStatus(s) === filter.key;
-            }).length;
-
-            return (
-              <button
-                key={filter.key}
-                onClick={() => toggleFilter(filter.key)}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all",
-                  isActive
-                    ? `${filter.bgColor} text-white`
-                    : `bg-zinc-800 ${filter.color} hover:bg-zinc-700`
-                )}
-              >
-                <span className={cn(
-                  "w-2 h-2 rounded-full",
-                  isActive ? "bg-white" : filter.bgColor
-                )} />
-                {filter.label}
-                <span className={cn(
-                  "px-1.5 py-0.5 rounded-full text-[10px]",
-                  isActive ? "bg-white/20" : "bg-zinc-700"
-                )}>
-                  {count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Segment List */}
-      <div className="max-h-[500px] overflow-y-auto">
-        {segments
-          .filter((segment) => {
-            if (searchQuery) {
-              const query = searchQuery.toLowerCase();
-              const matchesText = segment.text.toLowerCase().includes(query);
-              const matchesTopic = (segment.topic || "").toLowerCase().includes(query);
-              if (!matchesText && !matchesTopic) return false;
-            }
-
-            if (activeFilters.length > 0) {
-              const segmentStatus = segment.isSelected ? "selected" : getSegmentStatus(segment);
-              if (!activeFilters.includes(segmentStatus) && !(segment.isSelected && activeFilters.includes("selected"))) {
-                return false;
-              }
-            }
-
-            return true;
-          })
-          .map((segment) => {
-            const isSelected = segment.isSelected;
-            const status = getSegmentStatus(segment);
-
-            return (
-              <div
-                key={segment.id}
-                className={cn(
-                  "flex items-center gap-4 p-4 border-b border-zinc-800/50 cursor-pointer transition-colors group",
-                  isSelected
-                    ? "bg-emerald-500/10 hover:bg-emerald-500/15"
-                    : "hover:bg-zinc-800"
-                )}
-                onClick={() => onPlaySegment(segment)}
-              >
-                {/* Checkbox */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleSelect(segment.id);
-                  }}
-                  className={cn(
-                    "h-6 w-6 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors",
-                    isSelected
-                      ? "bg-emerald-500 border-emerald-500"
-                      : "border-zinc-600 hover:border-emerald-500"
-                  )}
-                >
-                  {isSelected && <CheckCircle2 className="h-4 w-4 text-white" />}
-                </button>
-
-                {/* Time */}
-                <div className="w-20 shrink-0">
-                  <div className="text-sm font-mono text-white">
-                    {formatTime(segment.startTime)}
-                  </div>
-                  <div className="text-xs text-zinc-600 font-mono">
-                    {formatTime(segment.endTime - segment.startTime)}
-                  </div>
-                </div>
-
-                {/* Topic & Text */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={cn(
-                      "text-sm font-medium",
-                      isSelected ? "text-emerald-400" : "text-white"
-                    )}>
-                      {segment.topic || "Sem topico"}
-                    </span>
-                    <span className={cn(
-                      "text-xs px-2 py-0.5 rounded-full",
-                      isSelected && "bg-emerald-500/20 text-emerald-400",
-                      !isSelected && status === "error" && "bg-red-500/20 text-red-400",
-                      !isSelected && status === "tangent" && "bg-amber-500/20 text-amber-400",
-                      !isSelected && status === "repetition" && "bg-yellow-500/20 text-yellow-400",
-                      !isSelected && status === "low-interest" && "bg-zinc-700 text-zinc-400",
-                      !isSelected && status === "good" && "bg-blue-500/20 text-blue-400"
-                    )}>
-                      {isSelected ? "Selecionado" : getStatusLabel(segment)}
-                    </span>
-                  </div>
-                  <p className="text-sm text-zinc-500 truncate">
-                    {segment.text}
-                  </p>
-                </div>
-
-                {/* Score */}
-                {segment.interestScore !== null && (
-                  <div className={cn(
-                    "w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0",
-                    (segment.interestScore || 0) >= 7
-                      ? "bg-emerald-500/20 text-emerald-400"
-                      : (segment.interestScore || 0) >= 5
-                      ? "bg-amber-500/20 text-amber-400"
-                      : "bg-red-500/20 text-red-400"
-                  )}>
-                    {segment.interestScore}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-      </div>
     </div>
   );
 }
