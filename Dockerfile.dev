@@ -42,12 +42,13 @@ RUN useradd -m -s /bin/bash -G sudo ubuntu \
 # Set working directory
 WORKDIR /home/ubuntu/aeropod
 
-# Copy project files
-COPY --chown=ubuntu:ubuntu . .
+# Copy project files and set permissions
+COPY . .
+RUN chown -R ubuntu:ubuntu /home/ubuntu/aeropod
 
 # Install project dependencies as ubuntu user
 USER ubuntu
-RUN npm ci --legacy-peer-deps
+RUN npm ci --legacy-peer-deps --include=dev
 
 # Switch back to root for final config
 USER root
