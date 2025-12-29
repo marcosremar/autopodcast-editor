@@ -1,4 +1,5 @@
 import {
+  Header,
   Hero,
   Problem,
   HowItWorks,
@@ -13,6 +14,7 @@ import {
 export default function Home() {
   return (
     <main>
+      <Header />
       <Hero />
       <Problem />
       <HowItWorks />
