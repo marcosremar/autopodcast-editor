@@ -1,0 +1,10 @@
+export { Hero } from "./Hero";
+export { Problem } from "./Problem";
+export { HowItWorks } from "./HowItWorks";
+export { Features } from "./Features";
+export { Comparison } from "./Comparison";
+export { Pricing } from "./Pricing";
+export { FAQ } from "./FAQ";
+export { CTA } from "./CTA";
+export { Footer } from "./Footer";
+export { WaitlistForm } from "./WaitlistForm";

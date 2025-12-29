@@ -1,0 +1,44 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Testing
+coverage
+e2e
+*.test.ts
+*.test.tsx
+*.spec.ts
+
+# Next.js
+.next
+out
+
+# Production
+build
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
+npm-debug.log*
+
+# Local env files
+.env*.local
+.env
+
+# IDE
+.idea
+.vscode
+
+# Git
+.git
+.gitignore
+
+# Drizzle
+drizzle
+
+# Playwright
+playwright-report
+test-results
