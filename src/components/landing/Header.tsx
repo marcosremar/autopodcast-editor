@@ -12,7 +12,7 @@ export function Header() {
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2">
             <Mic className="w-6 h-6 text-primary" />
-            <span className="font-bold text-lg">AutoPodcast</span>
+            <span className="font-bold text-lg">AeroPod</span>
           </Link>
 
           {/* Navigation */}

@@ -9,11 +9,11 @@ export function Footer() {
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <Mic className="w-5 h-5 text-primary" />
-            <span className="font-semibold">AutoPodcast</span>
+            <span className="font-semibold">AeroPod</span>
           </div>
 
           <p className="text-sm text-muted-foreground text-center">
-            &copy; {new Date().getFullYear()} AutoPodcast. Todos os direitos
+            &copy; {new Date().getFullYear()} AeroPod. Todos os direitos
             reservados.
           </p>
 

@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AutoPodcast - IA que edita seu podcast automaticamente",
+  title: "AeroPod - IA que edita seu podcast automaticamente",
   description:
     "Grave 2 horas, receba 30 minutos prontos para publicar. IA que seleciona os melhores momentos, remove enrolacao e monta a narrativa do seu podcast.",
   keywords: [
@@ -23,11 +23,11 @@ export const metadata: Metadata = {
     "ia",
     "inteligencia artificial",
     "editor de audio",
-    "autopodcast",
+    "aeropod",
   ],
-  authors: [{ name: "AutoPodcast" }],
+  authors: [{ name: "AeroPod" }],
   openGraph: {
-    title: "AutoPodcast - IA que edita seu podcast automaticamente",
+    title: "AeroPod - IA que edita seu podcast automaticamente",
     description:
       "Grave 2 horas, receba 30 minutos prontos para publicar. IA que seleciona os melhores momentos e monta a narrativa.",
     type: "website",
@@ -35,7 +35,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "AutoPodcast - IA que edita seu podcast automaticamente",
+    title: "AeroPod - IA que edita seu podcast automaticamente",
     description:
       "Grave 2 horas, receba 30 minutos prontos para publicar. IA que seleciona os melhores momentos e monta a narrativa.",
   },

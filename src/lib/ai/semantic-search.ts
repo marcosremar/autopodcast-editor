@@ -84,8 +84,8 @@ export class SemanticSearchService {
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${this.apiKey}`,
-        "HTTP-Referer": "https://autopodcast.app",
-        "X-Title": "AutoPodcast Editor",
+        "HTTP-Referer": "https://aeropod.app",
+        "X-Title": "AeroPod Editor",
       },
       body: JSON.stringify({
         model: this.embeddingModel,
@@ -120,8 +120,8 @@ export class SemanticSearchService {
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${this.apiKey}`,
-          "HTTP-Referer": "https://autopodcast.app",
-          "X-Title": "AutoPodcast Editor",
+          "HTTP-Referer": "https://aeropod.app",
+          "X-Title": "AeroPod Editor",
         },
         body: JSON.stringify({
           model: this.embeddingModel,
@@ -218,8 +218,8 @@ export class SemanticSearchService {
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${this.apiKey}`,
-        "HTTP-Referer": "https://autopodcast.app",
-        "X-Title": "AutoPodcast Editor",
+        "HTTP-Referer": "https://aeropod.app",
+        "X-Title": "AeroPod Editor",
       },
       body: JSON.stringify({
         model: "qwen/qwen-2.5-72b-instruct", // Modelo de chat para rerank

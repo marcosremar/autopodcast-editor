@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
-const SESSION_COOKIE_NAME = "autopodcast_session";
+const SESSION_COOKIE_NAME = "aeropod_session";
 const SESSION_DURATION = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
 
 export interface Session {

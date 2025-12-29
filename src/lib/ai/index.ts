@@ -1,5 +1,5 @@
 /**
- * AI Services for AutoPodcast Editor
+ * AI Services for AeroPod Editor
  *
  * This module provides AI-powered analysis, selection, and reordering
  * of podcast segments using Claude (Anthropic).

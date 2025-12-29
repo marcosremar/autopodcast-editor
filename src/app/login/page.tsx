@@ -50,7 +50,7 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: "demo@autopodcast.com", password: "demo" }),
+        body: JSON.stringify({ email: "demo@aeropod.com", password: "demo" }),
       });
 
       const data = await res.json();
@@ -76,7 +76,7 @@ export default function LoginPage() {
           <div className="text-center mb-8">
             <Link href="/" className="inline-flex items-center gap-2 mb-6">
               <Mic className="w-8 h-8 text-primary" />
-              <span className="font-bold text-2xl">AutoPodcast</span>
+              <span className="font-bold text-2xl">AeroPod</span>
             </Link>
             <h1 className="text-2xl font-bold mb-2">Entrar na sua conta</h1>
             <p className="text-muted-foreground">

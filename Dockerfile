@@ -1,16 +1,31 @@
+# ============================================
+# AeroPod - Dockerfile para Produção
+# ============================================
+
 # Build stage
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Install dependencies for native modules
+RUN apk add --no-cache libc6-compat
+
 # Copy package files
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Copy source code
 COPY . .
+
+# Build arguments for Next.js build
+ARG DATABASE_URL
+ARG NEXT_PUBLIC_APP_URL
+
+ENV DATABASE_URL=$DATABASE_URL
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Build the application
 RUN npm run build

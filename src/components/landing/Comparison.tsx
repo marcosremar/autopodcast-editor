@@ -80,7 +80,7 @@ export function Comparison() {
               <div className="text-center text-muted-foreground">
                 Editores tradicionais
               </div>
-              <div className="text-center text-primary">AutoPodcast</div>
+              <div className="text-center text-primary">AeroPod</div>
             </div>
 
             {/* Rows */}

@@ -34,7 +34,7 @@ export async function middleware(request: NextRequest) {
 
   if (isProtectedRoute) {
     // Check for session cookie
-    const sessionCookie = request.cookies.get("autopodcast_session");
+    const sessionCookie = request.cookies.get("aeropod_session");
 
     if (!sessionCookie) {
       // Redirect to home page if not authenticated
@@ -48,13 +48,13 @@ export async function middleware(request: NextRequest) {
       // Check if session is expired
       if (sessionData.expiresAt && Date.now() > sessionData.expiresAt) {
         const response = NextResponse.redirect(new URL("/", request.url));
-        response.cookies.delete("autopodcast_session");
+        response.cookies.delete("aeropod_session");
         return response;
       }
     } catch (error) {
       // Invalid session cookie, redirect to home
       const response = NextResponse.redirect(new URL("/", request.url));
-      response.cookies.delete("autopodcast_session");
+      response.cookies.delete("aeropod_session");
       return response;
     }
   }

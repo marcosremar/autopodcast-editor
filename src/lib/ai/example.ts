@@ -1,5 +1,5 @@
 /**
- * Example usage of AI services for AutoPodcast Editor
+ * Example usage of AI services for AeroPod Editor
  *
  * This file demonstrates how to use the AI analysis pipeline
  * in a real application context.
