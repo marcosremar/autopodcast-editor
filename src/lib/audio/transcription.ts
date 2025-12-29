@@ -1,4 +1,5 @@
 import Replicate from 'replicate';
+import Groq from 'groq-sdk';
 
 export interface TranscriptionSegment {
   id: number;
@@ -146,6 +147,76 @@ export class ReplicateTranscriptionService implements TranscriptionService {
   }
 }
 
+export class GroqTranscriptionService implements TranscriptionService {
+  private client: Groq;
+
+  constructor(apiKey: string) {
+    this.client = new Groq({ apiKey });
+  }
+
+  async transcribe(options: TranscriptionOptions): Promise<TranscriptionResult> {
+    try {
+      // For Groq, we need the actual file, not a URL
+      // This service expects audioUrl to be a local file path or base64 data
+      const audioData = await this.fetchAudioData(options.audioUrl);
+
+      const transcription = await this.client.audio.transcriptions.create({
+        file: new File([audioData], 'audio.mp3', { type: 'audio/mpeg' }),
+        model: 'whisper-large-v3',
+        response_format: 'verbose_json',
+        language: options.language || 'pt',
+      });
+
+      // Parse Groq response
+      const groqResult = transcription as unknown as {
+        text: string;
+        segments: Array<{ start: number; end: number; text: string }>;
+        language?: string;
+        duration?: number;
+      };
+
+      const segments: TranscriptionSegment[] = (groqResult.segments || []).map((s, index) => ({
+        id: index,
+        start: Math.round(s.start * 100) / 100,
+        end: Math.round(s.end * 100) / 100,
+        text: s.text.trim(),
+      }));
+
+      return {
+        text: groqResult.text || transcription.text,
+        segments,
+        language: groqResult.language || options.language,
+        duration: groqResult.duration || (segments.length > 0 ? segments[segments.length - 1].end : 0),
+      };
+    } catch (error) {
+      throw new Error(`Groq transcription failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async fetchAudioData(audioUrl: string): Promise<Buffer> {
+    // If it's a data URL or base64
+    if (audioUrl.startsWith('data:')) {
+      const base64 = audioUrl.split(',')[1];
+      return Buffer.from(base64, 'base64');
+    }
+
+    // If it's a local file path
+    if (audioUrl.startsWith('/') || audioUrl.startsWith('file://')) {
+      const fs = await import('fs');
+      const path = audioUrl.replace('file://', '');
+      return fs.readFileSync(path);
+    }
+
+    // If it's a remote URL, fetch it
+    const response = await fetch(audioUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch audio: ${response.statusText}`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+}
+
 export class MockTranscriptionService implements TranscriptionService {
   private delay: number;
 
@@ -201,11 +272,18 @@ export function createTranscriptionService(useMock = false): TranscriptionServic
     return new MockTranscriptionService(1000); // 1 second delay for testing
   }
 
-  const apiToken = process.env.REPLICATE_API_TOKEN;
-
-  if (!apiToken) {
-    throw new Error('Missing REPLICATE_API_TOKEN environment variable');
+  // Prefer Groq over Replicate (faster and cheaper)
+  const groqApiKey = process.env.GROQ_API_KEY;
+  if (groqApiKey) {
+    console.log('[Transcription] Using Groq Whisper');
+    return new GroqTranscriptionService(groqApiKey);
   }
 
-  return new ReplicateTranscriptionService(apiToken);
+  const replicateToken = process.env.REPLICATE_API_TOKEN;
+  if (replicateToken) {
+    console.log('[Transcription] Using Replicate Whisper');
+    return new ReplicateTranscriptionService(replicateToken);
+  }
+
+  throw new Error('Missing GROQ_API_KEY or REPLICATE_API_TOKEN environment variable');
 }

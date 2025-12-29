@@ -6,10 +6,11 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Mic, ArrowLeft } from "lucide-react";
+import { Mic, ArrowLeft, Play } from "lucide-react";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const router = useRouter();
@@ -23,13 +24,39 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, password }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
         setError(data.error || "Erro ao fazer login");
+        return;
+      }
+
+      router.push("/dashboard");
+    } catch {
+      setError("Erro de conexao. Tente novamente.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDemo() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "demo@autopodcast.com", password: "demo" }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Erro ao acessar demo");
         return;
       }
 
@@ -53,7 +80,7 @@ export default function LoginPage() {
             </Link>
             <h1 className="text-2xl font-bold mb-2">Entrar na sua conta</h1>
             <p className="text-muted-foreground">
-              Digite seu email para acessar o dashboard
+              Digite seu email e senha para acessar
             </p>
           </div>
 
@@ -72,6 +99,19 @@ export default function LoginPage() {
               />
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="password">Senha</Label>
+              <Input
+                id="password"
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                disabled={loading}
+              />
+            </div>
+
             {error && (
               <p className="text-sm text-red-500">{error}</p>
             )}
@@ -80,6 +120,28 @@ export default function LoginPage() {
               {loading ? "Entrando..." : "Entrar"}
             </Button>
           </form>
+
+          {/* Divider */}
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="bg-card px-2 text-muted-foreground">ou</span>
+            </div>
+          </div>
+
+          {/* Demo Button */}
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            onClick={handleDemo}
+            disabled={loading}
+          >
+            <Play className="w-4 h-4 mr-2" />
+            Acessar Demo
+          </Button>
 
           {/* Back link */}
           <div className="mt-6 text-center">

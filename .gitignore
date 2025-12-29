@@ -39,3 +39,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# media files (too large for git)
+/test-media/
+/public/uploads/
+*.mp4
+*.mp3
+*.webm
+*.wav
+*.m4a
+
+# test results
+/test-results/

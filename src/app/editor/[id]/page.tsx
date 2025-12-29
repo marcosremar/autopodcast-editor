@@ -4,12 +4,10 @@ import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Project, Segment } from "@/lib/db/schema";
-import { Timeline } from "@/components/editor/Timeline";
-import { AudioPlayer } from "@/components/editor/AudioPlayer";
+import { HorizontalTimeline } from "@/components/editor/HorizontalTimeline";
 import { ExportButton } from "@/components/editor/ExportButton";
-import { RemovedSegments } from "@/components/editor/RemovedSegments";
+import { EditorChat } from "@/components/editor/EditorChat";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft,
   Loader2,
@@ -17,6 +15,9 @@ import {
   CheckCircle2,
   Clock,
   FileAudio,
+  RefreshCw,
+  Sparkles,
+  Save,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -31,8 +32,9 @@ export default function EditorPage({ params }: EditorPageProps) {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   // Fetch project and segments
   useEffect(() => {
@@ -99,17 +101,6 @@ export default function EditorPage({ params }: EditorPageProps) {
     return () => clearTimeout(debounce);
   }, [segments, project, resolvedParams.id, isLoading]);
 
-  const handleReorder = (newOrder: Segment[]) => {
-    const updatedSegments = segments.map((seg) => {
-      const newIndex = newOrder.findIndex((s) => s.id === seg.id);
-      if (newIndex !== -1) {
-        return { ...seg, order: newIndex };
-      }
-      return seg;
-    });
-    setSegments(updatedSegments);
-  };
-
   const handleToggleSelect = (segmentId: string) => {
     setSegments((prev) =>
       prev.map((seg) =>
@@ -118,10 +109,53 @@ export default function EditorPage({ params }: EditorPageProps) {
     );
   };
 
-  const handlePlaySegment = (segment: Segment) => {
-    // In a real implementation, this would construct the audio URL for the segment
-    // For now, we'll use the project's original audio
-    setCurrentAudioUrl(project?.originalAudioUrl || null);
+  // Handler para acoes do chat
+  const handleChatAction = (action: { type: string; segmentIds?: string[]; message: string }) => {
+    if (!action.segmentIds || action.segmentIds.length === 0) return;
+
+    switch (action.type) {
+      case "select":
+        setSegments((prev) =>
+          prev.map((seg) =>
+            action.segmentIds!.includes(seg.id)
+              ? { ...seg, isSelected: true }
+              : seg
+          )
+        );
+        break;
+      case "deselect":
+        setSegments((prev) =>
+          prev.map((seg) =>
+            action.segmentIds!.includes(seg.id)
+              ? { ...seg, isSelected: false }
+              : seg
+          )
+        );
+        break;
+      case "focus":
+        // Scroll para o primeiro segmento
+        const firstSegment = document.querySelector(
+          `[data-segment-id="${action.segmentIds[0]}"]`
+        );
+        firstSegment?.scrollIntoView({ behavior: "smooth", block: "center" });
+        break;
+    }
+  };
+
+  const handleReprocess = async () => {
+    setIsProcessing(true);
+    try {
+      const response = await fetch(`/api/process/${resolvedParams.id}`, {
+        method: "POST",
+      });
+      if (response.ok) {
+        window.location.reload();
+      }
+    } catch (err) {
+      console.error("Error reprocessing:", err);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const formatDuration = (seconds: number | null) => {
@@ -131,44 +165,15 @@ export default function EditorPage({ params }: EditorPageProps) {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const getStatusBadge = (status: string | null) => {
-    switch (status) {
-      case "completed":
-        return (
-          <Badge variant="default" className="gap-1">
-            <CheckCircle2 className="h-3 w-3" />
-            Completed
-          </Badge>
-        );
-      case "processing":
-        return (
-          <Badge variant="secondary" className="gap-1">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Processing
-          </Badge>
-        );
-      case "failed":
-        return (
-          <Badge variant="destructive" className="gap-1">
-            <AlertCircle className="h-3 w-3" />
-            Failed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" className="gap-1">
-            {status}
-          </Badge>
-        );
-    }
-  };
-
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center bg-zinc-950">
         <div className="text-center">
-          <Loader2 className="mx-auto h-12 w-12 animate-spin text-blue-600" />
-          <p className="mt-4 text-gray-600">Loading project...</p>
+          <div className="relative">
+            <div className="h-16 w-16 rounded-full border-4 border-zinc-800 border-t-emerald-500 animate-spin mx-auto" />
+            <Sparkles className="h-6 w-6 text-emerald-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+          </div>
+          <p className="mt-6 text-zinc-400">Carregando projeto...</p>
         </div>
       </div>
     );
@@ -176,20 +181,21 @@ export default function EditorPage({ params }: EditorPageProps) {
 
   if (error || !project) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center bg-zinc-950">
         <div className="max-w-md text-center">
-          <AlertCircle className="mx-auto h-12 w-12 text-red-600" />
-          <h2 className="mt-4 text-xl font-semibold text-gray-900">
-            Error Loading Project
+          <div className="h-16 w-16 rounded-full bg-red-500/10 flex items-center justify-center mx-auto">
+            <AlertCircle className="h-8 w-8 text-red-500" />
+          </div>
+          <h2 className="mt-6 text-xl font-semibold text-white">
+            Erro ao carregar projeto
           </h2>
-          <p className="mt-2 text-gray-600">{error || "Project not found"}</p>
+          <p className="mt-2 text-zinc-400">{error || "Projeto nao encontrado"}</p>
           <Button
-            className="mt-6"
+            className="mt-6 bg-zinc-800 hover:bg-zinc-700 text-white"
             onClick={() => router.push("/dashboard")}
-            variant="outline"
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Dashboard
+            Voltar ao Dashboard
           </Button>
         </div>
       </div>
@@ -197,183 +203,158 @@ export default function EditorPage({ params }: EditorPageProps) {
   }
 
   const selectedCount = segments.filter((s) => s.isSelected).length;
-  const selectedDuration = segments
-    .filter((s) => s.isSelected)
-    .reduce((sum, seg) => sum + (seg.endTime - seg.startTime), 0);
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8"
-        >
-          <Button
-            variant="ghost"
+  // Show processing state if no segments yet
+  if (segments.length === 0 && project.status !== "completed") {
+    return (
+      <div className="min-h-screen bg-zinc-950">
+        <div className="mx-auto max-w-4xl px-4 py-8">
+          <button
             onClick={() => router.push("/dashboard")}
-            className="mb-4"
+            className="flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8"
           >
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Dashboard
-          </Button>
+            <ArrowLeft className="h-4 w-4" />
+            Voltar
+          </button>
 
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                {project.title || "Untitled Podcast"}
-              </h1>
-              <div className="mt-2 flex flex-wrap items-center gap-3">
-                {getStatusBadge(project.status)}
-                {project.originalDuration && (
-                  <Badge variant="outline" className="gap-1">
-                    <Clock className="h-3 w-3" />
-                    Original: {formatDuration(project.originalDuration)}
-                  </Badge>
-                )}
-                {project.targetDuration && (
-                  <Badge variant="outline" className="gap-1">
-                    <FileAudio className="h-3 w-3" />
-                    Target: {formatDuration(project.targetDuration)}
-                  </Badge>
-                )}
-                {isSaving && (
-                  <Badge variant="secondary" className="gap-1">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Saving...
-                  </Badge>
-                )}
-              </div>
+          <div className="text-center py-20">
+            <div className="relative inline-block">
+              <div className="h-20 w-20 rounded-full border-4 border-zinc-800 border-t-emerald-500 animate-spin" />
+              <Sparkles className="h-8 w-8 text-emerald-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+            </div>
+            <h2 className="mt-8 text-2xl font-bold text-white">
+              Processando Podcast
+            </h2>
+            <p className="mt-3 text-zinc-400 max-w-md mx-auto">
+              Estamos transcrevendo e analisando seu audio com IA.
+              Isso pode levar alguns minutos dependendo do tamanho do arquivo.
+            </p>
+            <div className="mt-8">
+              <span className={cn(
+                "inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium",
+                project.status === "transcribing" && "bg-blue-500/10 text-blue-400",
+                project.status === "analyzing" && "bg-purple-500/10 text-purple-400",
+                project.status === "failed" && "bg-red-500/10 text-red-400"
+              )}>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {project.status === "transcribing" && "Transcrevendo audio..."}
+                {project.status === "analyzing" && "Analisando segmentos..."}
+                {project.status === "failed" && "Falha no processamento"}
+                {!["transcribing", "analyzing", "failed"].includes(project.status || "") && "Processando..."}
+              </span>
             </div>
           </div>
-        </motion.div>
+        </div>
+      </div>
+    );
+  }
 
-        {/* Main content */}
-        <div className="grid gap-8 lg:grid-cols-3">
-          {/* Left column - Timeline */}
-          <div className="lg:col-span-2 space-y-6">
-            <motion.div
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.1 }}
-            >
-              <div className="mb-4">
-                <h2 className="text-xl font-semibold text-gray-900">
-                  Timeline
-                </h2>
-                <p className="text-sm text-gray-600">
-                  Drag to reorder segments. Click checkbox to add/remove.
-                </p>
-              </div>
+  return (
+    <div className="min-h-screen bg-zinc-950">
+      {/* Header */}
+      <header className="border-b border-zinc-800 bg-zinc-900/50 backdrop-blur-xl sticky top-0 z-50">
+        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => router.push("/dashboard")}
+                className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
 
-              <Timeline
-                segments={segments}
-                onReorder={handleReorder}
-                onToggleSelect={handleToggleSelect}
-                onPlaySegment={handlePlaySegment}
-              />
-            </motion.div>
-
-            {/* Removed segments */}
-            <motion.div
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.2 }}
-            >
-              <RemovedSegments
-                segments={segments}
-                onToggleSelect={handleToggleSelect}
-                onPlaySegment={handlePlaySegment}
-              />
-            </motion.div>
-          </div>
-
-          {/* Right column - Audio player and export */}
-          <div className="space-y-6">
-            <motion.div
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.1 }}
-              className="sticky top-8"
-            >
-              {/* Stats card */}
-              <div className="mb-6 rounded-xl border bg-white p-6 shadow-sm">
-                <h3 className="mb-4 font-semibold text-gray-900">
-                  Project Stats
-                </h3>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">
-                      Total Segments:
+              <div>
+                <h1 className="text-xl font-bold text-white">
+                  {project.title || "Podcast sem titulo"}
+                </h1>
+                <div className="flex items-center gap-3 mt-1">
+                  <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Pronto para editar
+                  </span>
+                  {project.originalDuration && (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+                      <Clock className="h-3 w-3" />
+                      {formatDuration(project.originalDuration)}
                     </span>
-                    <span className="font-semibold">{segments.length}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Selected:</span>
-                    <span className="font-semibold text-blue-600">
-                      {selectedCount}
+                  )}
+                  {isSaving && (
+                    <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+                      <Save className="h-3 w-3 animate-pulse" />
+                      Salvando...
                     </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">
-                      Selected Duration:
-                    </span>
-                    <span className="font-semibold text-blue-600">
-                      {formatDuration(selectedDuration)}
-                    </span>
-                  </div>
-                  {project.targetDuration && (
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600">
-                        vs Target:
-                      </span>
-                      <span
-                        className={cn(
-                          "font-semibold",
-                          selectedDuration <= project.targetDuration
-                            ? "text-green-600"
-                            : "text-orange-600"
-                        )}
-                      >
-                        {selectedDuration <= project.targetDuration
-                          ? "Within target"
-                          : `+${formatDuration(
-                              selectedDuration - project.targetDuration
-                            )}`}
-                      </span>
-                    </div>
                   )}
                 </div>
               </div>
+            </div>
 
-              {/* Audio player */}
-              <AudioPlayer
-                audioUrl={currentAudioUrl || project.originalAudioUrl}
-                title={currentAudioUrl ? "Segment Preview" : "Full Podcast"}
-                className="mb-6"
-              />
-
-              {/* Export button */}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleReprocess}
+                disabled={isProcessing}
+                className="text-zinc-400 hover:text-white hover:bg-zinc-800"
+              >
+                {isProcessing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                <span className="ml-2 hidden sm:inline">Reprocessar</span>
+              </Button>
               <ExportButton
                 projectId={project.id}
                 selectedSegmentsCount={selectedCount}
               />
-
-              {/* Help text */}
-              <div className="mt-4 rounded-lg bg-blue-50 p-4 text-xs text-blue-700">
-                <strong>Need help?</strong>
-                <ul className="mt-2 space-y-1 list-disc list-inside">
-                  <li>Drag segments to reorder the timeline</li>
-                  <li>Click play to preview individual segments</li>
-                  <li>Check/uncheck to add/remove segments</li>
-                  <li>Export when you&apos;re happy with the result</li>
-                </ul>
-              </div>
-            </motion.div>
+            </div>
           </div>
         </div>
-      </div>
+      </header>
+
+      {/* Main Editor */}
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+        >
+          <HorizontalTimeline
+            segments={segments}
+            audioUrl={project.originalAudioUrl}
+            onToggleSelect={handleToggleSelect}
+          />
+        </motion.div>
+
+        {/* Help Tips */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.2 }}
+          className="mt-6 p-4 rounded-xl bg-zinc-900 border border-zinc-800"
+        >
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-lg bg-emerald-500/10">
+              <Sparkles className="h-4 w-4 text-emerald-400" />
+            </div>
+            <div className="text-sm">
+              <p className="text-zinc-300 font-medium mb-1">Dica rapida</p>
+              <p className="text-zinc-500">
+                Use o <span className="text-emerald-400">Chat de Edicao</span> para editar com comandos naturais.
+                Ex: "Foque mais em IA", "Remova as repeticoes", "Adicione transicoes".
+              </p>
+            </div>
+          </div>
+        </motion.div>
+      </main>
+
+      {/* Chat de Edicao */}
+      <EditorChat
+        projectId={project.id}
+        onAction={handleChatAction}
+        isOpen={isChatOpen}
+        onToggle={() => setIsChatOpen(!isChatOpen)}
+      />
     </div>
   );
 }

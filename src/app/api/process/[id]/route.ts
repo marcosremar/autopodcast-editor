@@ -1,16 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db, projects } from "@/lib/db";
+import { db, projects, segments } from "@/lib/db";
 import { eq } from "drizzle-orm";
-import { PodcastPipeline } from "@/services/pipeline";
+import Groq from "groq-sdk";
+import * as fs from "fs";
+import * as path from "path";
 
-// Mock services for MVP
-// In production, these would be real implementations
-import type {
-  TranscriptionService,
-  AnalysisService,
-  ReorderService,
-  StorageService,
-} from "@/services/pipeline";
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_LLM_MODEL = "llama-3.3-70b-versatile";
+
+interface TranscriptionSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
+interface SegmentAnalysis {
+  topic: string;
+  interestScore: number;
+  clarityScore: number;
+  isTangent: boolean;
+  isRepetition: boolean;
+  keyInsight: string;
+  hasFactualError: boolean;
+  hasContradiction: boolean;
+  isConfusing: boolean;
+  isIncomplete: boolean;
+  needsRerecord: boolean;
+  rerecordSuggestion?: string;
+}
 
 /**
  * POST /api/process/[id]
@@ -56,31 +73,23 @@ export async function POST(
     }
 
     // Check if already processing
-    if (project.status === "transcribing" || project.status === "analyzing" || project.status === "reordering") {
+    if (project.status === "transcribing" || project.status === "analyzing") {
       return NextResponse.json(
         { error: "Project is already being processed" },
         { status: 409 }
       );
     }
 
-    // Initialize services (mock implementations for MVP)
-    const transcriptionService = createTranscriptionService();
-    const analysisService = createAnalysisService();
-    const reorderService = createReorderService();
-    const storageService = createStorageService();
-
-    // Create pipeline
-    const pipeline = new PodcastPipeline(
-      transcriptionService,
-      analysisService,
-      reorderService,
-      storageService
-    );
+    // Check for Groq API key
+    if (!GROQ_API_KEY) {
+      return NextResponse.json(
+        { error: "GROQ_API_KEY not configured" },
+        { status: 500 }
+      );
+    }
 
     // Start processing in background
-    // For MVP, we'll use a simple async call
-    // In production, you'd use a job queue like BullMQ or AWS SQS
-    processInBackground(pipeline, id);
+    processInBackground(id, project.originalAudioUrl);
 
     return NextResponse.json({
       message: "Processing started",
@@ -99,129 +108,268 @@ export async function POST(
 /**
  * Process the pipeline in the background
  */
-async function processInBackground(pipeline: PodcastPipeline, projectId: string) {
+async function processInBackground(projectId: string, audioUrl: string) {
+  const groq = new Groq({ apiKey: GROQ_API_KEY });
+
   try {
     console.log(`[Pipeline] Starting processing for project ${projectId}`);
-    await pipeline.process(projectId);
-    console.log(`[Pipeline] Completed processing for project ${projectId}`);
+
+    // Update status to transcribing
+    await db
+      .update(projects)
+      .set({ status: "transcribing", updatedAt: new Date() })
+      .where(eq(projects.id, projectId));
+
+    // 1. Transcribe audio
+    console.log(`[Pipeline] Transcribing audio...`);
+    const transcription = await transcribeAudio(groq, audioUrl);
+    console.log(`[Pipeline] Transcription complete: ${transcription.length} segments`);
+
+    // Update project with transcription text
+    const fullText = transcription.map(s => s.text).join(" ");
+    await db
+      .update(projects)
+      .set({
+        transcription: fullText,
+        originalDuration: Math.ceil(transcription[transcription.length - 1]?.end || 0),
+        status: "analyzing",
+        updatedAt: new Date(),
+      })
+      .where(eq(projects.id, projectId));
+
+    // 2. Analyze segments
+    console.log(`[Pipeline] Analyzing segments...`);
+    const context = transcription.slice(0, 5).map(s => s.text).join(" ").substring(0, 500);
+    const previousTopics: string[] = [];
+    const analyzedSegments: Array<TranscriptionSegment & { analysis: SegmentAnalysis }> = [];
+
+    for (let i = 0; i < transcription.length; i++) {
+      const seg = transcription[i];
+      console.log(`[Pipeline] Analyzing segment ${i + 1}/${transcription.length}`);
+
+      try {
+        const analysis = await analyzeSegment(groq, seg, context, previousTopics.slice(-5));
+        analyzedSegments.push({ ...seg, analysis });
+        previousTopics.push(analysis.topic);
+      } catch (error) {
+        console.error(`[Pipeline] Error analyzing segment ${i}:`, error);
+        analyzedSegments.push({
+          ...seg,
+          analysis: {
+            topic: "Erro na analise",
+            interestScore: 5,
+            clarityScore: 5,
+            isTangent: false,
+            isRepetition: false,
+            keyInsight: "",
+            hasFactualError: false,
+            hasContradiction: false,
+            isConfusing: false,
+            isIncomplete: false,
+            needsRerecord: false,
+          },
+        });
+      }
+
+      // Small delay to avoid rate limits
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    // 3. Select best segments
+    console.log(`[Pipeline] Selecting best segments...`);
+    const selectedSegments = selectBestSegments(analyzedSegments);
+
+    // 4. Delete existing segments for this project
+    await db.delete(segments).where(eq(segments.projectId, projectId));
+
+    // 5. Insert new segments
+    console.log(`[Pipeline] Saving ${analyzedSegments.length} segments to database...`);
+    for (let i = 0; i < analyzedSegments.length; i++) {
+      const seg = analyzedSegments[i];
+      const isSelected = selectedSegments.some(s => s.start === seg.start && s.end === seg.end);
+
+      await db.insert(segments).values({
+        projectId,
+        startTime: seg.start,
+        endTime: seg.end,
+        text: seg.text,
+        topic: seg.analysis.topic,
+        interestScore: seg.analysis.interestScore,
+        clarityScore: seg.analysis.clarityScore,
+        keyInsight: seg.analysis.keyInsight,
+        isSelected,
+        order: isSelected ? selectedSegments.findIndex(s => s.start === seg.start) : null,
+        analysis: seg.analysis as any,
+        hasError: seg.analysis.hasFactualError || seg.analysis.hasContradiction,
+        errorType: seg.analysis.hasFactualError ? "factual" : seg.analysis.hasContradiction ? "contradiction" : null,
+        errorDetail: seg.analysis.hasFactualError ? "Erro factual detectado" : seg.analysis.hasContradiction ? "Contradicao detectada" : null,
+      });
+    }
+
+    // 6. Update project status
+    await db
+      .update(projects)
+      .set({ status: "completed", updatedAt: new Date() })
+      .where(eq(projects.id, projectId));
+
+    console.log(`[Pipeline] Processing complete for project ${projectId}`);
   } catch (error) {
     console.error(`[Pipeline] Error processing project ${projectId}:`, error);
+
+    // Update project status to failed
+    await db
+      .update(projects)
+      .set({ status: "failed", updatedAt: new Date() })
+      .where(eq(projects.id, projectId));
   }
 }
 
 /**
- * Create mock transcription service
- * In production, this would use OpenAI Whisper API or similar
+ * Transcribe audio using Groq Whisper
  */
-function createTranscriptionService(): TranscriptionService {
-  return {
-    async transcribe(audioUrl: string) {
-      console.log(`[MockTranscription] Transcribing audio: ${audioUrl}`);
+async function transcribeAudio(groq: Groq, audioUrl: string): Promise<TranscriptionSegment[]> {
+  // If it's a local file path, read it
+  let audioData: Buffer;
 
-      // Simulate API call delay
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+  if (audioUrl.startsWith("file://")) {
+    const filePath = audioUrl.replace("file://", "");
+    audioData = fs.readFileSync(filePath);
+  } else if (audioUrl.startsWith("http")) {
+    // Fetch from URL
+    const response = await fetch(audioUrl);
+    const arrayBuffer = await response.arrayBuffer();
+    audioData = Buffer.from(arrayBuffer);
+  } else {
+    // Assume it's a relative path in public folder (e.g., /uploads/audio.mp3)
+    // Remove leading slash if present for path.join to work correctly
+    const relativePath = audioUrl.startsWith("/") ? audioUrl.slice(1) : audioUrl;
+    const filePath = path.join(process.cwd(), "public", relativePath);
+    console.log(`[Pipeline] Looking for audio at: ${filePath}`);
+    if (fs.existsSync(filePath)) {
+      audioData = fs.readFileSync(filePath);
+    } else {
+      throw new Error(`Audio file not found: ${filePath}`);
+    }
+  }
 
-      // Return mock transcription
-      return {
-        text: "This is a mock transcription of the audio file. In production, this would be real transcription from Whisper API.",
-        segments: [
-          {
-            start: 0,
-            end: 30,
-            text: "Welcome to this podcast episode. Today we're talking about AI and machine learning.",
-          },
-          {
-            start: 30,
-            end: 60,
-            text: "First, let's discuss the basics of neural networks and how they work.",
-          },
-          {
-            start: 60,
-            end: 90,
-            text: "Neural networks are inspired by the human brain and consist of interconnected nodes.",
-          },
-          {
-            start: 90,
-            end: 120,
-            text: "Now let's look at some practical applications of machine learning in everyday life.",
-          },
-        ],
-      };
-    },
+  const transcription = await groq.audio.transcriptions.create({
+    file: new File([audioData], "audio.mp3", { type: "audio/mpeg" }),
+    model: "whisper-large-v3",
+    response_format: "verbose_json",
+    language: "pt",
+  });
+
+  const result = transcription as unknown as {
+    segments: Array<{ start: number; end: number; text: string }>;
   };
+
+  return (result.segments || []).map((s) => ({
+    start: Math.round(s.start * 100) / 100,
+    end: Math.round(s.end * 100) / 100,
+    text: s.text.trim(),
+  }));
 }
 
 /**
- * Create mock analysis service
- * In production, this would use Claude API
+ * Analyze a segment using Groq Llama
  */
-function createAnalysisService(): AnalysisService {
-  return {
-    async analyzeSegment(text: string, context: string) {
-      console.log(`[MockAnalysis] Analyzing segment: ${text.substring(0, 50)}...`);
-
-      // Simulate API call delay
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Return mock analysis
-      return {
-        topic: "AI and Machine Learning",
-        interestScore: Math.floor(Math.random() * 40) + 60, // 60-100
-        clarityScore: Math.floor(Math.random() * 40) + 60, // 60-100
-        isTangent: Math.random() > 0.8,
-        isRepetition: Math.random() > 0.9,
-        keyInsight: "Discussion of key concepts in AI",
-        dependsOn: [],
-        standalone: Math.random() > 0.3,
-        hasFactualError: false,
-        hasContradiction: false,
-        isConfusing: Math.random() > 0.85,
-        isIncomplete: false,
-        needsRerecord: false,
-      };
-    },
+async function analyzeSegment(
+  groq: Groq,
+  segment: TranscriptionSegment,
+  context: string,
+  previousTopics: string[]
+): Promise<SegmentAnalysis> {
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
+
+  const prompt = `Voce e um editor de podcast experiente. Analise este segmento de audio transcrito.
+
+CONTEXTO DO EPISODIO:
+${context}
+
+TOPICOS JA DISCUTIDOS:
+${previousTopics.length > 0 ? previousTopics.join(", ") : "Nenhum ainda"}
+
+SEGMENTO A ANALISAR (${formatTime(segment.start)} - ${formatTime(segment.end)}):
+"${segment.text}"
+
+Retorne APENAS um JSON valido:
+{
+  "topic": "topico principal (2-4 palavras)",
+  "interestScore": 1-10,
+  "clarityScore": 1-10,
+  "isTangent": true/false,
+  "isRepetition": true/false,
+  "keyInsight": "insight principal ou vazio",
+  "hasFactualError": true/false,
+  "hasContradiction": true/false,
+  "isConfusing": true/false,
+  "isIncomplete": true/false,
+  "needsRerecord": true/false,
+  "rerecordSuggestion": "sugestao se precisar regravar"
+}`;
+
+  const response = await groq.chat.completions.create({
+    model: GROQ_LLM_MODEL,
+    max_tokens: 500,
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const content = response.choices[0]?.message?.content || "{}";
+  const jsonMatch = content.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error("JSON not found in response");
+  }
+
+  return JSON.parse(jsonMatch[0]) as SegmentAnalysis;
 }
 
 /**
- * Create mock reorder service
- * In production, this would use Claude API for narrative ordering
+ * Select best segments for the final podcast
  */
-function createReorderService(): ReorderService {
-  return {
-    async suggestOrder(segments) {
-      console.log(`[MockReorder] Suggesting order for ${segments.length} segments`);
+function selectBestSegments(
+  segments: Array<TranscriptionSegment & { analysis: SegmentAnalysis }>
+): Array<TranscriptionSegment & { analysis: SegmentAnalysis }> {
+  // Filter out tangents, repetitions, and errors
+  const validSegments = segments.filter((seg) => {
+    if (seg.analysis.isTangent) return false;
+    if (seg.analysis.isRepetition) return false;
+    if (seg.analysis.hasFactualError) return false;
+    if (seg.analysis.hasContradiction) return false;
+    if (seg.analysis.interestScore < 5) return false;
+    return true;
+  });
 
-      // Simulate API call delay
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+  // Sort by combined score
+  const scored = validSegments.map((s) => ({
+    ...s,
+    score: s.analysis.interestScore * 0.6 + s.analysis.clarityScore * 0.4,
+  }));
+  scored.sort((a, b) => b.score - a.score);
 
-      // Return mock order (keep original order for now)
-      return segments.map((segment, index) => ({
-        segmentId: segment.id,
-        suggestedOrder: index,
-        reason: "Maintains logical flow",
-      }));
-    },
-  };
-}
+  // Calculate target duration (aim for ~60% of original)
+  const originalDuration = segments.reduce((sum, s) => sum + (s.end - s.start), 0);
+  const targetDuration = originalDuration * 0.6;
 
-/**
- * Create mock storage service
- * In production, this would use AWS S3 or similar
- */
-function createStorageService(): StorageService {
-  return {
-    async uploadFile(file: Buffer, key: string, contentType: string) {
-      console.log(`[MockStorage] Uploading file: ${key}`);
-      return `https://mock-storage.example.com/${key}`;
-    },
+  // Select segments up to target duration
+  const selected: typeof scored = [];
+  let totalDuration = 0;
 
-    async deleteFile(key: string) {
-      console.log(`[MockStorage] Deleting file: ${key}`);
-    },
+  for (const seg of scored) {
+    const duration = seg.end - seg.start;
+    if (totalDuration + duration <= targetDuration) {
+      selected.push(seg);
+      totalDuration += duration;
+    }
+  }
 
-    async getFileUrl(key: string) {
-      return `https://mock-storage.example.com/${key}`;
-    },
-  };
+  // Re-sort by original time order
+  selected.sort((a, b) => a.start - b.start);
+
+  return selected;
 }

@@ -1,7 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
+import Groq from "groq-sdk";
 import type { SegmentAnalysis } from "@/lib/db/schema";
 
-const ANALYSIS_MODEL = "claude-3-5-sonnet-20241022";
+const CLAUDE_MODEL = "claude-sonnet-4-20250514";
+const GROQ_MODEL = "llama-3.3-70b-versatile";
 
 export interface SegmentWithContext {
   text: string;
@@ -15,22 +17,42 @@ export interface BatchAnalysisOptions {
 }
 
 export class AnalysisService {
-  private client: Anthropic | null = null;
+  private anthropicClient: Anthropic | null = null;
+  private groqClient: Groq | null = null;
   private useMock: boolean = false;
+  private provider: "anthropic" | "groq" = "groq";
 
-  constructor(apiKey?: string, options?: { useMock?: boolean }) {
+  constructor(options?: {
+    anthropicApiKey?: string;
+    groqApiKey?: string;
+    useMock?: boolean;
+    provider?: "anthropic" | "groq";
+  }) {
     this.useMock = options?.useMock ?? false;
+    this.provider = options?.provider ?? "groq";
 
     if (!this.useMock) {
-      if (!apiKey) {
-        throw new Error("Anthropic API key is required unless using mock mode");
+      // Initialize Groq if available (preferred)
+      if (options?.groqApiKey) {
+        this.groqClient = new Groq({ apiKey: options.groqApiKey });
+        this.provider = "groq";
       }
-      this.client = new Anthropic({ apiKey });
+      // Initialize Anthropic as fallback
+      if (options?.anthropicApiKey) {
+        this.anthropicClient = new Anthropic({ apiKey: options.anthropicApiKey });
+        if (!this.groqClient) {
+          this.provider = "anthropic";
+        }
+      }
+
+      if (!this.groqClient && !this.anthropicClient) {
+        throw new Error("Either Groq or Anthropic API key is required unless using mock mode");
+      }
     }
   }
 
   /**
-   * Analyzes a single segment using Claude
+   * Analyzes a single segment using Groq (Llama) or Claude
    */
   async analyzeSegment(
     segment: SegmentWithContext
@@ -39,30 +61,56 @@ export class AnalysisService {
       return this.generateMockAnalysis(segment);
     }
 
-    if (!this.client) {
-      throw new Error("Anthropic client not initialized");
-    }
-
     const prompt = this.buildAnalysisPrompt(segment);
 
     try {
-      const message = await this.client.messages.create({
-        model: ANALYSIS_MODEL,
-        max_tokens: 2048,
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      });
+      let responseText: string;
 
-      const content = message.content[0];
-      if (content.type !== "text") {
-        throw new Error("Unexpected response type from Claude");
+      if (this.provider === "groq" && this.groqClient) {
+        // Use Groq (Llama)
+        const completion = await this.groqClient.chat.completions.create({
+          model: GROQ_MODEL,
+          messages: [
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+          temperature: 0.1,
+          max_tokens: 2048,
+          response_format: { type: "json_object" },
+        });
+
+        responseText = completion.choices[0]?.message?.content || "{}";
+      } else if (this.anthropicClient) {
+        // Use Claude
+        const message = await this.anthropicClient.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 2048,
+          messages: [
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+        });
+
+        const content = message.content[0];
+        if (content.type !== "text") {
+          throw new Error("Unexpected response type from Claude");
+        }
+        responseText = content.text;
+      } else {
+        throw new Error("No LLM client initialized");
       }
 
-      const analysis = JSON.parse(content.text);
+      // Extract JSON from response
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error("Could not extract JSON from response");
+      }
+
+      const analysis = JSON.parse(jsonMatch[0]);
       return this.validateAndNormalizeAnalysis(analysis);
     } catch (error) {
       console.error("Error analyzing segment:", error);
@@ -311,12 +359,18 @@ Return ONLY valid JSON, no other text. Example format:
  */
 export function createAnalysisService(
   options?: {
-    apiKey?: string;
     useMock?: boolean;
+    provider?: "anthropic" | "groq";
   }
 ): AnalysisService {
-  const apiKey = options?.apiKey || process.env.ANTHROPIC_API_KEY;
+  const groqApiKey = process.env.GROQ_API_KEY;
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   const useMock = options?.useMock ?? false;
 
-  return new AnalysisService(apiKey, { useMock });
+  return new AnalysisService({
+    groqApiKey,
+    anthropicApiKey,
+    useMock,
+    provider: options?.provider,
+  });
 }
