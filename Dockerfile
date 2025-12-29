@@ -13,7 +13,9 @@ RUN apk add --no-cache libc6-compat
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install ALL dependencies (including devDependencies for build)
+# Force NODE_ENV=development to ensure TypeScript and build tools are installed
+ENV NODE_ENV=development
 RUN npm ci --legacy-peer-deps
 
 # Copy source code
