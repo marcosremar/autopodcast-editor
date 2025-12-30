@@ -44,7 +44,7 @@ const statusConfig: Record<
   { variant: "default" | "secondary" | "destructive" | "outline"; label: string }
 > = {
   uploading: { variant: "secondary", label: "Uploading" },
-  uploaded: { variant: "default", label: "Ready to Edit" },
+  uploaded: { variant: "secondary", label: "Processing" },
   transcribing: { variant: "secondary", label: "Transcribing" },
   analyzing: { variant: "secondary", label: "Analyzing" },
   ready: { variant: "default", label: "Ready" },
@@ -85,7 +85,7 @@ export function ProjectCard({ project, onDelete }: ProjectCardProps) {
   const router = useRouter()
   const [isDeleting, setIsDeleting] = useState(false)
   const statusInfo = statusConfig[project.status as ProjectStatus] || { variant: "outline" as const, label: project.status || "Unknown" }
-  const isProcessing = ["uploading", "transcribing", "analyzing"].includes(
+  const isProcessing = ["uploading", "uploaded", "transcribing", "analyzing"].includes(
     project.status
   )
 
@@ -106,12 +106,12 @@ export function ProjectCard({ project, onDelete }: ProjectCardProps) {
   }
 
   const handleClick = () => {
-    if (project.status === "ready" || project.status === "completed" || project.status === "uploaded") {
+    if (project.status === "ready" || project.status === "completed") {
       router.push(`/editor/${project.id}`)
     }
   }
 
-  const isClickable = project.status === "ready" || project.status === "completed" || project.status === "uploaded"
+  const isClickable = project.status === "ready" || project.status === "completed"
 
   return (
     <motion.div

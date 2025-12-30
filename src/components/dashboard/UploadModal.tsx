@@ -170,6 +170,21 @@ export function UploadModal({
         throw new Error("Upload failed")
       }
 
+      const data = await response.json()
+      const projectId = data.projectId
+
+      // Start processing automatically
+      if (projectId) {
+        try {
+          await fetch(`/api/process/${projectId}`, {
+            method: "POST",
+          })
+        } catch (err) {
+          console.error("Failed to start processing:", err)
+          // Don't fail the upload if processing fails to start
+        }
+      }
+
       // Success
       setTimeout(() => {
         resetForm()
