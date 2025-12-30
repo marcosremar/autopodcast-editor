@@ -32,12 +32,6 @@ interface UploadModalProps {
 const ALLOWED_TYPES = ["audio/mpeg", "audio/wav", "audio/x-m4a", "audio/mp4"]
 const MAX_FILE_SIZE = 500 * 1024 * 1024 // 500MB
 
-const TARGET_DURATIONS = [
-  { value: "15-20", label: "15-20 minutes" },
-  { value: "25-35", label: "25-35 minutes" },
-  { value: "40-50", label: "40-50 minutes" },
-]
-
 function formatFileSize(bytes: number): string {
   if (bytes === 0) return "0 Bytes"
   const k = 1024
@@ -53,7 +47,6 @@ export function UploadModal({
 }: UploadModalProps) {
   const [file, setFile] = useState<File | null>(null)
   const [title, setTitle] = useState("")
-  const [targetDuration, setTargetDuration] = useState("")
   const [isDragging, setIsDragging] = useState(false)
   const [error, setError] = useState("")
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -63,7 +56,6 @@ export function UploadModal({
   const resetForm = useCallback(() => {
     setFile(null)
     setTitle("")
-    setTargetDuration("")
     setError("")
     setUploadProgress(0)
     setIsUploading(false)
@@ -142,7 +134,7 @@ export function UploadModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!file || !title || !targetDuration) {
+    if (!file || !title) {
       setError("Please fill in all required fields")
       return
     }
@@ -154,7 +146,6 @@ export function UploadModal({
       const formData = new FormData()
       formData.append("file", file)
       formData.append("title", title)
-      formData.append("targetDuration", targetDuration)
 
       // Simulate upload progress
       const progressInterval = setInterval(() => {
@@ -310,27 +301,6 @@ export function UploadModal({
             />
           </div>
 
-          {/* Target Duration Selector */}
-          <div>
-            <Label htmlFor="duration">Target Duration *</Label>
-            <Select
-              value={targetDuration}
-              onValueChange={setTargetDuration}
-              disabled={isUploading}
-            >
-              <SelectTrigger id="duration" className="mt-2">
-                <SelectValue placeholder="Select target duration" />
-              </SelectTrigger>
-              <SelectContent>
-                {TARGET_DURATIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
           {/* Upload Progress */}
           {isUploading && (
             <motion.div
@@ -367,7 +337,7 @@ export function UploadModal({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={!file || !title || !targetDuration || isUploading}>
+            <Button type="submit" disabled={!file || !title || isUploading}>
               {isUploading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
