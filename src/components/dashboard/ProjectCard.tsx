@@ -17,6 +17,7 @@ import { Progress } from "@/components/ui/progress"
 
 type ProjectStatus =
   | "uploading"
+  | "uploaded"
   | "transcribing"
   | "analyzing"
   | "ready"
@@ -43,6 +44,7 @@ const statusConfig: Record<
   { variant: "default" | "secondary" | "destructive" | "outline"; label: string }
 > = {
   uploading: { variant: "secondary", label: "Uploading" },
+  uploaded: { variant: "default", label: "Ready to Edit" },
   transcribing: { variant: "secondary", label: "Transcribing" },
   analyzing: { variant: "secondary", label: "Analyzing" },
   ready: { variant: "default", label: "Ready" },
@@ -104,12 +106,12 @@ export function ProjectCard({ project, onDelete }: ProjectCardProps) {
   }
 
   const handleClick = () => {
-    if (project.status === "ready" || project.status === "completed") {
+    if (project.status === "ready" || project.status === "completed" || project.status === "uploaded") {
       router.push(`/editor/${project.id}`)
     }
   }
 
-  const isClickable = project.status === "ready" || project.status === "completed"
+  const isClickable = project.status === "ready" || project.status === "completed" || project.status === "uploaded"
 
   return (
     <motion.div
