@@ -52,7 +52,19 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchProjects()
-  }, [])
+
+    // Poll for updates every 3 seconds if there are processing projects
+    const interval = setInterval(() => {
+      const hasProcessing = projects.some((p) =>
+        ["uploading", "uploaded", "transcribing", "analyzing"].includes(p.status)
+      )
+      if (hasProcessing) {
+        fetchProjects()
+      }
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [projects])
 
   // Handle project deletion
   const handleDeleteProject = async (id: string) => {

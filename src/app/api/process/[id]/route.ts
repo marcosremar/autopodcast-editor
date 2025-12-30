@@ -117,7 +117,7 @@ async function processInBackground(projectId: string, audioUrl: string) {
     // Update status to transcribing
     await db
       .update(projects)
-      .set({ status: "transcribing", updatedAt: new Date() })
+      .set({ status: "transcribing", progress: 10, updatedAt: new Date() })
       .where(eq(projects.id, projectId));
 
     // 1. Transcribe audio
@@ -133,6 +133,7 @@ async function processInBackground(projectId: string, audioUrl: string) {
         transcription: fullText,
         originalDuration: Math.ceil(transcription[transcription.length - 1]?.end || 0),
         status: "analyzing",
+        progress: 30,
         updatedAt: new Date(),
       })
       .where(eq(projects.id, projectId));
@@ -170,6 +171,13 @@ async function processInBackground(projectId: string, audioUrl: string) {
           },
         });
       }
+
+      // Update progress (30% to 80% during analysis)
+      const analysisProgress = Math.floor(30 + ((i + 1) / transcription.length) * 50);
+      await db
+        .update(projects)
+        .set({ progress: analysisProgress, updatedAt: new Date() })
+        .where(eq(projects.id, projectId));
 
       // Small delay to avoid rate limits
       await new Promise(r => setTimeout(r, 100));
@@ -209,7 +217,7 @@ async function processInBackground(projectId: string, audioUrl: string) {
     // 6. Update project status
     await db
       .update(projects)
-      .set({ status: "completed", updatedAt: new Date() })
+      .set({ status: "completed", progress: 100, updatedAt: new Date() })
       .where(eq(projects.id, projectId));
 
     console.log(`[Pipeline] Processing complete for project ${projectId}`);

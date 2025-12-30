@@ -35,6 +35,7 @@ export const projects = pgTable("projects", {
   userId: uuid("user_id").references(() => users.id),
   title: varchar("title", { length: 255 }),
   status: varchar("status", { length: 50 }).default("uploading"),
+  progress: integer("progress").default(0), // 0-100 percentage
   originalAudioUrl: text("original_audio_url"),
   originalDuration: integer("original_duration"), // seconds
   targetDuration: integer("target_duration"), // seconds
