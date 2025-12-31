@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Segment, SegmentAnalysis } from "@/lib/db/schema";
@@ -21,11 +21,9 @@ import {
   AlertTriangle,
   MessageSquare,
   MousePointer2,
-  Flame,
-  Star,
-  Minus,
   Eye,
   Repeat,
+  Scissors,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +52,7 @@ interface AdvancedTimelineProps {
   previewRange?: PreviewRange;
   onPreviewClose?: () => void;
   onTimeUpdate?: (time: number) => void;
+  onPlayingChange?: (isPlaying: boolean) => void;
 }
 
 // Segment detail modal
@@ -395,7 +394,7 @@ function RangeConfirmModal({ segments, isOpen, onClose, onConfirm, formatTime }:
 }
 
 export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimelineProps>(
-  function AdvancedTimeline({ segments, audioUrl, onToggleSelect, onSelectRange, onUpdateSegment, className, initialMode = "full", previewRange, onPreviewClose, onTimeUpdate }, ref) {
+  function AdvancedTimeline({ segments, audioUrl, onToggleSelect, onSelectRange, onUpdateSegment, className, initialMode = "full", previewRange, onPreviewClose, onTimeUpdate, onPlayingChange }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -577,8 +576,14 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
       };
 
       const handleLoadedMetadata = () => setDuration(audio.duration);
-      const handlePlay = () => setIsPlaying(true);
-      const handlePause = () => setIsPlaying(false);
+      const handlePlay = () => {
+        setIsPlaying(true);
+        onPlayingChange?.(true);
+      };
+      const handlePause = () => {
+        setIsPlaying(false);
+        onPlayingChange?.(false);
+      };
 
       const handleEnded = () => {
         setIsPlaying(false);
@@ -898,6 +903,44 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
     // Stats
     const reduction = totalDuration > 0 ? Math.round((1 - editedDuration / totalDuration) * 100) : 0;
 
+    // Calculate gaps between segments (areas where content was removed)
+    interface Gap {
+      startTime: number;
+      endTime: number;
+      duration: number;
+    }
+
+    const gaps = useMemo<Gap[]>(() => {
+      if (mode !== "full" && mode !== "preview") return []; // Only show gaps in full/preview mode
+      if (displaySegments.length === 0) return [];
+
+      const sortedSegments = [...displaySegments].sort((a, b) => a.startTime - b.startTime);
+      const calculatedGaps: Gap[] = [];
+
+      for (let i = 0; i < sortedSegments.length - 1; i++) {
+        const currentSegment = sortedSegments[i];
+        const nextSegment = sortedSegments[i + 1];
+        const gapStart = currentSegment.endTime;
+        const gapEnd = nextSegment.startTime;
+        const gapDuration = gapEnd - gapStart;
+
+        // Only show gaps that are at least 0.5 second (to filter out tiny rounding errors)
+        if (gapDuration >= 0.5) {
+          calculatedGaps.push({
+            startTime: gapStart,
+            endTime: gapEnd,
+            duration: gapDuration,
+          });
+        }
+      }
+
+      return calculatedGaps;
+    }, [displaySegments, mode]);
+
+    // Hovered gap state
+    const [hoveredGap, setHoveredGap] = useState<Gap | null>(null);
+    const [gapTooltipPosition, setGapTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+
     // Calculate segment position for edited mode
     const getSegmentPosition = (segment: Segment, index: number) => {
       // In preview mode, use full timeline positioning (time-based)
@@ -1155,6 +1198,76 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
 
             {/* Segments Track */}
             <div className="relative h-14 bg-zinc-950">
+              {/* Gap Indicators */}
+              {gaps.map((gap, index) => {
+                const gapWidth = gap.duration * pixelsPerSecond;
+                const gapLeft = gap.startTime * pixelsPerSecond;
+                const isGapHovered = hoveredGap === gap;
+
+                // Only render if gap is visible (min 4px width)
+                if (gapWidth < 4) return null;
+
+                return (
+                  <div
+                    key={`gap-${index}`}
+                    className={cn(
+                      "absolute top-1/2 -translate-y-1/2 cursor-pointer transition-all duration-200",
+                      isGapHovered ? "z-15" : "z-5"
+                    )}
+                    style={{
+                      left: `${gapLeft}px`,
+                      width: `${gapWidth}px`,
+                    }}
+                    onMouseEnter={(e) => {
+                      setHoveredGap(gap);
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setGapTooltipPosition({
+                        x: rect.left + rect.width / 2,
+                        y: rect.top,
+                      });
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredGap(null);
+                      setGapTooltipPosition(null);
+                    }}
+                  >
+                    {/* Gap Visual - Striped Pattern */}
+                    <div
+                      className={cn(
+                        "h-8 rounded border border-dashed transition-all duration-200",
+                        isGapHovered
+                          ? "border-red-400/60 bg-red-500/20"
+                          : "border-zinc-600/40 bg-zinc-800/30"
+                      )}
+                      style={{
+                        backgroundImage: isGapHovered
+                          ? "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(239, 68, 68, 0.15) 4px, rgba(239, 68, 68, 0.15) 8px)"
+                          : "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(113, 113, 122, 0.15) 4px, rgba(113, 113, 122, 0.15) 8px)",
+                      }}
+                    >
+                      {/* Gap Label - only show if wide enough */}
+                      {gapWidth > 40 && (
+                        <div className="h-full flex items-center justify-center gap-1">
+                          <Scissors className={cn(
+                            "h-3 w-3",
+                            isGapHovered ? "text-red-400" : "text-zinc-500"
+                          )} />
+                          {gapWidth > 60 && (
+                            <span className={cn(
+                              "text-[9px] font-medium",
+                              isGapHovered ? "text-red-400" : "text-zinc-500"
+                            )}>
+                              {formatTime(gap.duration)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Segments */}
               {displaySegments.map((segment, index) => {
                 const { left, width } = getSegmentPosition(segment, index);
                 const analysis = segment.analysis as SegmentAnalysis | null;
@@ -1203,25 +1316,32 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                       }
                     }}
                   >
+                    {/* Wave Spectrum Background */}
+                    <div className="absolute inset-0 flex items-end justify-around px-0.5 pb-1 overflow-hidden opacity-60">
+                      {Array.from({ length: Math.max(3, Math.min(Math.floor(width / 4), 30)) }).map((_, i) => {
+                        // Generate varied heights for wave effect
+                        const baseHeight = 30 + Math.sin(i * 0.8) * 20 + Math.cos(i * 1.2) * 15;
+                        const height = Math.max(15, Math.min(85, baseHeight + (i % 3) * 10));
+                        return (
+                          <div
+                            key={i}
+                            className={cn(
+                              "w-[2px] rounded-t-full",
+                              segment.isSelected
+                                ? "bg-emerald-300/70"
+                                : "bg-white/30"
+                            )}
+                            style={{ height: `${height}%` }}
+                          />
+                        );
+                      })}
+                    </div>
                     {/* Segment Content - Compact */}
-                    <div className="px-1.5 py-1 h-full flex items-center gap-1.5 overflow-hidden">
+                    <div className="relative px-1.5 py-1 h-full flex items-center overflow-hidden z-10">
                       {/* Topic Label */}
                       {width > 50 && (
-                        <span className="text-[10px] font-medium text-white/90 truncate">
+                        <span className="text-[10px] font-medium text-white drop-shadow-sm truncate">
                           {segment.topic || "..."}
-                        </span>
-                      )}
-
-                      {/* Interest Icon */}
-                      {width > 25 && segment.interestScore !== null && (
-                        <span className="flex items-center">
-                          {segment.interestScore >= 8 ? (
-                            <Flame className="h-3 w-3 text-orange-400" fill="currentColor" />
-                          ) : segment.interestScore >= 5 ? (
-                            <Star className="h-3 w-3 text-amber-400/80" fill="currentColor" />
-                          ) : (
-                            <Minus className="h-2.5 w-2.5 text-zinc-500" />
-                          )}
                         </span>
                       )}
                     </div>
@@ -1350,17 +1470,6 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                   <div className="bg-zinc-900/95 backdrop-blur-md border border-zinc-700/80 rounded-lg px-3 py-2 shadow-xl max-w-[280px] min-w-[150px]">
                     {/* Topic */}
                     <div className="flex items-center gap-2 mb-1">
-                      {segment.interestScore !== null && (
-                        <span className="flex items-center">
-                          {segment.interestScore >= 8 ? (
-                            <Flame className="h-3 w-3 text-orange-400" fill="currentColor" />
-                          ) : segment.interestScore >= 5 ? (
-                            <Star className="h-3 w-3 text-amber-400" fill="currentColor" />
-                          ) : (
-                            <Minus className="h-2.5 w-2.5 text-zinc-500" />
-                          )}
-                        </span>
-                      )}
                       <span className="text-xs font-semibold text-white truncate">
                         {segment.topic || "Sem tópico"}
                       </span>
@@ -1381,6 +1490,44 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                 </motion.div>
               );
             })()}
+          </AnimatePresence>,
+          document.body
+        )}
+
+        {/* Gap Tooltip Portal */}
+        {typeof document !== 'undefined' && hoveredGap && gapTooltipPosition && createPortal(
+          <AnimatePresence>
+            <motion.div
+              key="gap-tooltip"
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 5 }}
+              transition={{ duration: 0.15 }}
+              className="fixed pointer-events-none -translate-x-1/2"
+              style={{
+                left: gapTooltipPosition.x,
+                bottom: `calc(100vh - ${gapTooltipPosition.y}px + 10px)`,
+                zIndex: 9999,
+              }}
+            >
+              <div className="bg-zinc-900/95 backdrop-blur-md border border-red-500/40 rounded-lg px-3 py-2 shadow-xl">
+                {/* Gap Info */}
+                <div className="flex items-center gap-2 mb-1">
+                  <Scissors className="h-3 w-3 text-red-400" />
+                  <span className="text-xs font-semibold text-red-400">
+                    Conteúdo Removido
+                  </span>
+                </div>
+                {/* Duration */}
+                <div className="flex items-center gap-2 text-[10px] text-zinc-400">
+                  <span>{formatTime(hoveredGap.startTime)} - {formatTime(hoveredGap.endTime)}</span>
+                  <span className="text-zinc-600">•</span>
+                  <span className="text-red-400 font-medium">{formatTime(hoveredGap.duration)}</span>
+                </div>
+                {/* Arrow */}
+                <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent border-t-red-500/40" />
+              </div>
+            </motion.div>
           </AnimatePresence>,
           document.body
         )}

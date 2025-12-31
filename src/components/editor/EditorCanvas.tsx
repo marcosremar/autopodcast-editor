@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { Segment, ProjectSection } from "@/lib/db/schema";
 import { cn } from "@/lib/utils";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Play,
   Pause,
@@ -41,6 +42,7 @@ interface EditorCanvasProps {
   sections?: SectionWithSegments[];
   selectedSegmentId?: string;
   currentTime: number;
+  isPlaying?: boolean;
   onSeekTo: (time: number) => void;
   onSelectSegment: (segmentId: string) => void;
   projectTitle?: string;
@@ -74,6 +76,7 @@ export function EditorCanvas({
   sections,
   selectedSegmentId,
   currentTime,
+  isPlaying = false,
   onSeekTo,
   onSelectSegment,
   projectTitle,
@@ -81,6 +84,9 @@ export function EditorCanvas({
   className,
 }: EditorCanvasProps) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const segmentRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const containerRef = useRef<HTMLDivElement>(null);
+  const lastScrolledSegmentId = useRef<string | null>(null);
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -124,6 +130,39 @@ export function EditorCanvas({
     [segments, currentTime]
   );
 
+  // Calculate progress within current segment (0-100)
+  const segmentProgress = useMemo(() => {
+    if (!currentSegment) return 0;
+    const segmentDuration = currentSegment.endTime - currentSegment.startTime;
+    if (segmentDuration === 0) return 0;
+    return ((currentTime - currentSegment.startTime) / segmentDuration) * 100;
+  }, [currentSegment, currentTime]);
+
+  // Auto-scroll to current segment when playing
+  useEffect(() => {
+    if (!currentSegment || !isPlaying) return;
+
+    // Only scroll if this is a new segment (not continuous updates)
+    if (lastScrolledSegmentId.current === currentSegment.id) return;
+    lastScrolledSegmentId.current = currentSegment.id;
+
+    const segmentElement = segmentRefs.current.get(currentSegment.id);
+    if (segmentElement && containerRef.current) {
+      // Scroll the segment into view with smooth animation
+      segmentElement.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+  }, [currentSegment?.id, isPlaying]);
+
+  // Reset last scrolled segment when playback stops
+  useEffect(() => {
+    if (!isPlaying) {
+      lastScrolledSegmentId.current = null;
+    }
+  }, [isPlaying]);
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -143,82 +182,177 @@ export function EditorCanvas({
   };
 
   // Render a single segment item
-  const renderSegmentItem = (segment: Segment, index: number, globalIndex: number) => (
-    <button
-      key={segment.id}
-      onClick={() => onSelectSegment(segment.id)}
-      className={cn(
-        "w-full px-6 py-4 flex items-start gap-4 hover:bg-zinc-900/80 transition-colors text-left group",
-        currentSegment?.id === segment.id && "bg-emerald-500/5 border-l-2 border-emerald-500",
-        !segment.isSelected && "opacity-60"
-      )}
-    >
-      {/* Segment Number */}
+  const renderSegmentItem = (segment: Segment, index: number, globalIndex: number) => {
+    const isCurrentSegment = currentSegment?.id === segment.id;
+    const segmentDuration = segment.endTime - segment.startTime;
+    const progressPercent = isCurrentSegment ? segmentProgress : 0;
+
+    return (
       <div
-        className={cn(
-          "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm font-semibold transition-colors",
-          segment.isSelected
-            ? "bg-emerald-500/20 text-emerald-400"
-            : "bg-zinc-800 text-zinc-500 group-hover:bg-zinc-700"
-        )}
+        key={segment.id}
+        ref={(el) => {
+          if (el) {
+            segmentRefs.current.set(segment.id, el);
+          } else {
+            segmentRefs.current.delete(segment.id);
+          }
+        }}
+        className="relative"
       >
-        {globalIndex + 1}
-      </div>
+        {/* Progress bar overlay for current segment */}
+        {isCurrentSegment && (
+          <motion.div
+            className="absolute inset-0 bg-gradient-to-r from-emerald-500/10 to-transparent pointer-events-none z-0"
+            initial={{ width: 0 }}
+            animate={{ width: `${progressPercent}%` }}
+            transition={{ duration: 0.1 }}
+          />
+        )}
 
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        {/* Meta row */}
-        <div className="flex items-center gap-3 mb-2">
-          <span className="text-xs text-zinc-500 font-mono">
-            {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
-          </span>
-          {segment.topic && (
-            <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-500/20 text-emerald-400 font-medium">
-              {segment.topic}
-            </span>
+        <button
+          onClick={() => onSelectSegment(segment.id)}
+          className={cn(
+            "w-full px-6 py-4 flex items-start gap-4 hover:bg-zinc-900/80 transition-all text-left group relative z-10",
+            isCurrentSegment && "bg-emerald-500/5 border-l-4 border-emerald-500 shadow-lg shadow-emerald-500/10",
+            !isCurrentSegment && currentSegment && "opacity-50",
+            !segment.isSelected && "opacity-60"
           )}
-          {segment.keyInsight && (
-            <Lightbulb className="h-3.5 w-3.5 text-amber-400" />
+        >
+          {/* Playing indicator for current segment */}
+          {isCurrentSegment && (
+            <motion.div
+              className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500"
+              layoutId="playhead"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                className="absolute -right-1 top-1/2 -translate-y-1/2 w-3 h-3 bg-emerald-500 rounded-full shadow-lg shadow-emerald-500/50"
+                animate={{ scale: [1, 1.2, 1] }}
+                transition={{ duration: 1, repeat: Infinity }}
+              />
+            </motion.div>
           )}
-          {segment.hasError && (
-            <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
-          )}
-        </div>
 
-        {/* Text - show more lines */}
-        <p className="text-sm text-zinc-300 leading-relaxed line-clamp-3">
-          {segment.text}
-        </p>
+          {/* Segment Number */}
+          <div
+            className={cn(
+              "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm font-semibold transition-all",
+              isCurrentSegment
+                ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/30"
+                : segment.isSelected
+                ? "bg-emerald-500/20 text-emerald-400"
+                : "bg-zinc-800 text-zinc-500 group-hover:bg-zinc-700"
+            )}
+          >
+            {isCurrentSegment ? (
+              <Volume2 className="h-4 w-4 animate-pulse" />
+            ) : (
+              globalIndex + 1
+            )}
+          </div>
 
-        {/* Scores bar */}
-        {(segment.interestScore || segment.clarityScore) && (
-          <div className="flex items-center gap-4 mt-2">
-            {segment.interestScore && (
-              <div className="flex items-center gap-1.5">
-                <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                  <div
+          {/* Content */}
+          <div className="flex-1 min-w-0">
+            {/* Meta row */}
+            <div className="flex items-center gap-3 mb-2">
+              <span className={cn(
+                "text-xs font-mono",
+                isCurrentSegment ? "text-emerald-400" : "text-zinc-500"
+              )}>
+                {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
+              </span>
+              {isCurrentSegment && (
+                <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-500 text-white font-medium animate-pulse">
+                  {formatTime(currentTime - segment.startTime)} / {formatTime(segmentDuration)}
+                </span>
+              )}
+              {segment.topic && (
+                <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-500/20 text-emerald-400 font-medium">
+                  {segment.topic}
+                </span>
+              )}
+              {segment.keyInsight && (
+                <Lightbulb className="h-3.5 w-3.5 text-amber-400" />
+              )}
+              {segment.hasError && (
+                <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+              )}
+            </div>
+
+            {/* Text - show more lines */}
+            <p className={cn(
+              "text-sm leading-relaxed line-clamp-3 transition-colors",
+              isCurrentSegment ? "text-white" : "text-zinc-300"
+            )}>
+              {segment.text}
+            </p>
+
+            {/* Progress bar within segment */}
+            {isCurrentSegment && (
+              <div className="mt-3">
+                <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                  <motion.div
                     className="h-full bg-emerald-500 rounded-full"
-                    style={{ width: `${(segment.interestScore || 0) * 10}%` }}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${progressPercent}%` }}
+                    transition={{ duration: 0.1 }}
                   />
                 </div>
-                <span className="text-xs text-zinc-500">{segment.interestScore}/10</span>
+              </div>
+            )}
+
+            {/* Scores bar - only show when not playing */}
+            {!isCurrentSegment && (segment.interestScore || segment.clarityScore) && (
+              <div className="flex items-center gap-4 mt-2">
+                {segment.interestScore && (
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full"
+                        style={{ width: `${(segment.interestScore || 0) * 10}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-zinc-500">{segment.interestScore}/10</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
-      </div>
 
-      {/* Status indicator */}
-      <div className="flex items-center gap-2 shrink-0">
-        {segment.isSelected ? (
-          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-        ) : (
-          <XCircle className="h-5 w-5 text-zinc-600" />
-        )}
-        <ChevronRight className="h-4 w-4 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+          {/* Status indicator */}
+          <div className="flex items-center gap-2 shrink-0">
+            {isCurrentSegment ? (
+              <div className="flex items-center gap-2">
+                <div className="flex gap-0.5">
+                  {[0, 1, 2].map((i) => (
+                    <motion.div
+                      key={i}
+                      className="w-1 bg-emerald-500 rounded-full"
+                      animate={{
+                        height: [12, 20, 12],
+                      }}
+                      transition={{
+                        duration: 0.5,
+                        repeat: Infinity,
+                        delay: i * 0.15,
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : segment.isSelected ? (
+              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+            ) : (
+              <XCircle className="h-5 w-5 text-zinc-600" />
+            )}
+            <ChevronRight className="h-4 w-4 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+          </div>
+        </button>
       </div>
-    </button>
-  );
+    );
+  };
 
   // If a segment is selected, show segment details
   if (selectedSegment) {
@@ -394,6 +528,53 @@ export function EditorCanvas({
   // Default view - Project Overview with Sections
   return (
     <div className={cn("flex flex-col h-full bg-zinc-950 overflow-hidden", className)}>
+      {/* Current Segment Indicator Header */}
+      <AnimatePresence>
+        {currentSegment && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-emerald-500/10 border-b border-emerald-500/30 overflow-hidden"
+          >
+            <div className="px-6 py-2 flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <div className="flex gap-0.5">
+                  {[0, 1, 2].map((i) => (
+                    <motion.div
+                      key={i}
+                      className="w-0.5 bg-emerald-500 rounded-full"
+                      animate={{
+                        height: [8, 16, 8],
+                      }}
+                      transition={{
+                        duration: 0.5,
+                        repeat: Infinity,
+                        delay: i * 0.15,
+                      }}
+                    />
+                  ))}
+                </div>
+                <span className="text-xs font-medium text-emerald-400">Reproduzindo</span>
+              </div>
+              <span className="text-sm text-white font-medium truncate flex-1">
+                {currentSegment.topic || `Segmento ${segments.indexOf(currentSegment) + 1}`}
+              </span>
+              <span className="text-xs text-emerald-400 font-mono">
+                {formatTime(currentTime)} / {formatTime(currentSegment.endTime)}
+              </span>
+              <div className="w-24 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full bg-emerald-500 rounded-full"
+                  animate={{ width: `${segmentProgress}%` }}
+                  transition={{ duration: 0.1 }}
+                />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Compact Header with Stats */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 shrink-0">
         <div>
@@ -428,7 +609,7 @@ export function EditorCanvas({
       </div>
 
       {/* Content with Sections */}
-      <div className="flex-1 overflow-auto">
+      <div ref={containerRef} className="flex-1 overflow-auto scroll-smooth">
         {sections && sections.length > 0 ? (
           // Render with sections
           <div>

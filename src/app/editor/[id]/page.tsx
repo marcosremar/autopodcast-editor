@@ -63,6 +63,7 @@ export default function EditorPage({ params }: EditorPageProps) {
   const [userId, setUserId] = useState<string>("");
   const [activePanel, setActivePanel] = useState<SidebarPanel>("chat");
   const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | undefined>(undefined);
 
   // Fetch user ID for chat persistence
@@ -531,6 +532,7 @@ export default function EditorPage({ params }: EditorPageProps) {
               previewRange={previewRange}
               onPreviewClose={handlePreviewClose}
               onTimeUpdate={handleTimeUpdate}
+              onPlayingChange={setIsPlaying}
               className="rounded-none border-0"
             />
           </div>
@@ -540,6 +542,7 @@ export default function EditorPage({ params }: EditorPageProps) {
             <div className="flex-1 min-h-0 overflow-hidden">
               <EditorCanvas
                 segments={segments}
+                isPlaying={isPlaying}
                 sections={(() => {
                   // Generate demo sections based on segments
                   if (segments.length === 0) return undefined;
