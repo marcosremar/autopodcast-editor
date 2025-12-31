@@ -1,8 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle, useMemo } from "react";
-import { createPortal } from "react-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { Segment, SegmentAnalysis } from "@/lib/db/schema";
 import {
   Play,
@@ -13,14 +12,7 @@ import {
   VolumeX,
   ZoomIn,
   ZoomOut,
-  Check,
   X,
-  Tag,
-  FileText,
-  Sparkles,
-  AlertTriangle,
-  MessageSquare,
-  MousePointer2,
   Eye,
   Repeat,
   Scissors,
@@ -47,6 +39,7 @@ interface AdvancedTimelineProps {
   onToggleSelect: (segmentId: string) => void;
   onSelectRange?: (segmentIds: string[], select: boolean) => void;
   onUpdateSegment?: (segmentId: string, updates: Partial<Segment>) => void;
+  onSegmentClick?: (segmentId: string) => void;
   className?: string;
   initialMode?: TimelineMode;
   previewRange?: PreviewRange;
@@ -55,346 +48,8 @@ interface AdvancedTimelineProps {
   onPlayingChange?: (isPlaying: boolean) => void;
 }
 
-// Segment detail modal
-interface SegmentDetailProps {
-  segment: Segment;
-  isOpen: boolean;
-  onClose: () => void;
-  onToggleSelect: () => void;
-  onPlay: () => void;
-  formatTime: (seconds: number) => string;
-}
-
-function SegmentDetail({ segment, isOpen, onClose, onToggleSelect, onPlay, formatTime }: SegmentDetailProps) {
-  if (!isOpen) return null;
-
-  const analysis = segment.analysis as SegmentAnalysis | null;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-zinc-900 rounded-2xl border border-zinc-700 max-w-2xl w-full max-h-[80vh] overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-zinc-800">
-          <div className="flex items-center gap-3">
-            <div className={cn(
-              "w-10 h-10 rounded-xl flex items-center justify-center",
-              segment.isSelected ? "bg-emerald-500" : "bg-zinc-700"
-            )}>
-              {segment.isSelected ? (
-                <Check className="h-5 w-5 text-white" />
-              ) : (
-                <FileText className="h-5 w-5 text-zinc-400" />
-              )}
-            </div>
-            <div>
-              <h3 className="font-semibold text-white">
-                {segment.topic || "Segmento"}
-              </h3>
-              <p className="text-xs text-zinc-500">
-                {formatTime(segment.startTime)} - {formatTime(segment.endTime)} ({formatTime(segment.endTime - segment.startTime)})
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="p-4 overflow-y-auto max-h-[50vh]">
-          {/* Summary */}
-          {analysis?.keyInsight && (
-            <div className="mb-4 p-3 bg-zinc-800/50 rounded-xl">
-              <div className="flex items-center gap-2 mb-2">
-                <Sparkles className="h-4 w-4 text-amber-400" />
-                <span className="text-xs font-medium text-amber-400 uppercase">Resumo</span>
-              </div>
-              <p className="text-sm text-zinc-300">{analysis.keyInsight}</p>
-            </div>
-          )}
-
-          {/* Warnings */}
-          {(analysis?.hasFactualError || analysis?.hasContradiction || analysis?.isTangent || analysis?.isRepetition) && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl">
-              <div className="flex items-center gap-2 mb-2">
-                <AlertTriangle className="h-4 w-4 text-red-400" />
-                <span className="text-xs font-medium text-red-400 uppercase">Avisos</span>
-              </div>
-              <div className="space-y-1 text-sm text-red-300">
-                {analysis?.hasFactualError && <p>Erro factual: {analysis.factualErrorDetail}</p>}
-                {analysis?.hasContradiction && <p>Contradicao: {analysis.contradictionDetail}</p>}
-                {analysis?.isTangent && <p>Tangente - fora do topico principal</p>}
-                {analysis?.isRepetition && <p>Conteudo repetido</p>}
-              </div>
-            </div>
-          )}
-
-          {/* Full Text */}
-          <div className="mb-4">
-            <div className="flex items-center gap-2 mb-2">
-              <MessageSquare className="h-4 w-4 text-zinc-500" />
-              <span className="text-xs font-medium text-zinc-500 uppercase">Transcricao Completa</span>
-            </div>
-            <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
-              {segment.text}
-            </p>
-          </div>
-
-          {/* Scores */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="p-3 bg-zinc-800/50 rounded-xl">
-              <div className="text-xs text-zinc-500 mb-1">Interesse</div>
-              <div className={cn(
-                "text-2xl font-bold",
-                (segment.interestScore || 0) >= 7 ? "text-emerald-400" :
-                (segment.interestScore || 0) >= 5 ? "text-amber-400" : "text-red-400"
-              )}>
-                {segment.interestScore || 0}/10
-              </div>
-            </div>
-            <div className="p-3 bg-zinc-800/50 rounded-xl">
-              <div className="text-xs text-zinc-500 mb-1">Clareza</div>
-              <div className={cn(
-                "text-2xl font-bold",
-                (segment.clarityScore || 0) >= 7 ? "text-emerald-400" :
-                (segment.clarityScore || 0) >= 5 ? "text-amber-400" : "text-red-400"
-              )}>
-                {segment.clarityScore || 0}/10
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-3 p-4 border-t border-zinc-800">
-          <button
-            onClick={onPlay}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl transition-colors"
-          >
-            <Play className="h-4 w-4" fill="currentColor" />
-            Ouvir Segmento
-          </button>
-          <button
-            onClick={onToggleSelect}
-            className={cn(
-              "flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl transition-colors",
-              segment.isSelected
-                ? "bg-red-500/20 hover:bg-red-500/30 text-red-400"
-                : "bg-emerald-500 hover:bg-emerald-400 text-white"
-            )}
-          >
-            {segment.isSelected ? (
-              <>
-                <X className="h-4 w-4" />
-                Remover
-              </>
-            ) : (
-              <>
-                <Check className="h-4 w-4" />
-                Selecionar
-              </>
-            )}
-          </button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// Confirmation modal for adding segment
-interface AddConfirmModalProps {
-  segment: Segment;
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  onPlay: () => void;
-  formatTime: (seconds: number) => string;
-}
-
-function AddConfirmModal({ segment, isOpen, onClose, onConfirm, onPlay, formatTime }: AddConfirmModalProps) {
-  if (!isOpen) return null;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-zinc-900 rounded-2xl border border-zinc-700 max-w-md w-full overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="p-4 border-b border-zinc-800 text-center">
-          <div className="w-12 h-12 rounded-full bg-emerald-500/20 flex items-center justify-center mx-auto mb-3">
-            <Check className="h-6 w-6 text-emerald-400" />
-          </div>
-          <h3 className="font-semibold text-white text-lg">
-            Adicionar segmento?
-          </h3>
-        </div>
-
-        {/* Content */}
-        <div className="p-4">
-          <div className="bg-zinc-800/50 rounded-xl p-3 mb-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Tag className="h-4 w-4 text-zinc-500" />
-              <span className="text-sm font-medium text-white">
-                {segment.topic || "Sem topico"}
-              </span>
-            </div>
-            <p className="text-xs text-zinc-400 line-clamp-3">
-              {segment.text}
-            </p>
-            <div className="flex items-center gap-3 mt-2 text-xs text-zinc-500">
-              <span>{formatTime(segment.startTime)} - {formatTime(segment.endTime)}</span>
-              <span>Score: {segment.interestScore || 0}/10</span>
-            </div>
-          </div>
-
-          <p className="text-sm text-zinc-400 text-center">
-            Deseja adicionar este segmento a edicao final?
-          </p>
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-3 p-4 border-t border-zinc-800">
-          <button
-            onClick={onPlay}
-            className="p-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded-xl transition-colors"
-            title="Ouvir"
-          >
-            <Play className="h-4 w-4" fill="currentColor" />
-          </button>
-          <button
-            onClick={onClose}
-            className="flex-1 py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl transition-colors"
-          >
-            Cancelar
-          </button>
-          <button
-            onClick={() => {
-              onConfirm();
-              onClose();
-            }}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl transition-colors"
-          >
-            <Check className="h-4 w-4" />
-            Adicionar
-          </button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// Range selection confirmation modal
-interface RangeConfirmModalProps {
-  segments: Segment[];
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  formatTime: (seconds: number) => string;
-}
-
-function RangeConfirmModal({ segments, isOpen, onClose, onConfirm, formatTime }: RangeConfirmModalProps) {
-  if (!isOpen || segments.length === 0) return null;
-
-  const totalDuration = segments.reduce((sum, s) => sum + (s.endTime - s.startTime), 0);
-  const alreadySelected = segments.filter(s => s.isSelected).length;
-  const toAdd = segments.length - alreadySelected;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <motion.div
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-zinc-900 rounded-2xl border border-zinc-700 max-w-md w-full overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="p-4 border-b border-zinc-800 text-center">
-          <div className="w-12 h-12 rounded-full bg-blue-500/20 flex items-center justify-center mx-auto mb-3">
-            <MousePointer2 className="h-6 w-6 text-blue-400" />
-          </div>
-          <h3 className="font-semibold text-white text-lg">
-            Selecionar {segments.length} segmentos?
-          </h3>
-        </div>
-
-        {/* Content */}
-        <div className="p-4">
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <div className="bg-zinc-800/50 rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold text-white">{segments.length}</div>
-              <div className="text-xs text-zinc-500">Segmentos</div>
-            </div>
-            <div className="bg-zinc-800/50 rounded-xl p-3 text-center">
-              <div className="text-2xl font-bold text-emerald-400">{formatTime(totalDuration)}</div>
-              <div className="text-xs text-zinc-500">Duracao</div>
-            </div>
-          </div>
-
-          {alreadySelected > 0 && (
-            <p className="text-xs text-zinc-500 text-center">
-              {alreadySelected} ja selecionados, {toAdd} serao adicionados
-            </p>
-          )}
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-3 p-4 border-t border-zinc-800">
-          <button
-            onClick={onClose}
-            className="flex-1 py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl transition-colors"
-          >
-            Cancelar
-          </button>
-          <button
-            onClick={() => {
-              onConfirm();
-              onClose();
-            }}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl transition-colors"
-          >
-            <Check className="h-4 w-4" />
-            Selecionar Todos
-          </button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
 export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimelineProps>(
-  function AdvancedTimeline({ segments, audioUrl, onToggleSelect, onSelectRange, onUpdateSegment, className, initialMode = "full", previewRange, onPreviewClose, onTimeUpdate, onPlayingChange }, ref) {
+  function AdvancedTimeline({ segments, audioUrl, onToggleSelect, onSelectRange, onUpdateSegment, onSegmentClick, className, initialMode = "full", previewRange, onPreviewClose, onTimeUpdate, onPlayingChange }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -403,24 +58,9 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
     const [isMuted, setIsMuted] = useState(false);
     const [zoom, setZoom] = useState(1);
     const [scrollLeft, setScrollLeft] = useState(0);
-    const [selectedSegmentDetail, setSelectedSegmentDetail] = useState<Segment | null>(null);
     const [hoveredSegment, setHoveredSegment] = useState<string | null>(null);
     const [mode, setMode] = useState<TimelineMode>(initialMode);
     const [previewLoop, setPreviewLoop] = useState(false); // Loop mode for preview
-
-    // Range selection state
-    const [rangeStartSegment, setRangeStartSegment] = useState<string | null>(null);
-    const [rangeEndSegment, setRangeEndSegment] = useState<string | null>(null);
-    const [isRangeSelecting, setIsRangeSelecting] = useState(false);
-    const [isDragging, setIsDragging] = useState(false);
-
-    // Modal states
-    const [addConfirmSegment, setAddConfirmSegment] = useState<Segment | null>(null);
-    const [rangeConfirmSegments, setRangeConfirmSegments] = useState<Segment[]>([]);
-
-    // Tooltip position state
-    const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
-    const segmentRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
     // Scrubbing state (dragging on ruler)
     const [isScrubbing, setIsScrubbing] = useState(false);
@@ -683,7 +323,6 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
     };
 
     const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
-      if (isRangeSelecting) return;
       const rect = e.currentTarget.getBoundingClientRect();
       const clickX = e.clientX - rect.left + scrollLeft;
       const clickTime = clickX / pixelsPerSecond;
@@ -709,132 +348,11 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
       return "border-white/10";
     };
 
-    // Get segments in range (sorted by startTime)
-    const getSegmentsInRange = useCallback((startId: string | null, endId: string | null): string[] => {
-      if (!startId || !endId) return [];
-
-      const sortedSegments = [...displaySegments].sort((a, b) => a.startTime - b.startTime);
-      const startIndex = sortedSegments.findIndex(s => s.id === startId);
-      const endIndex = sortedSegments.findIndex(s => s.id === endId);
-
-      if (startIndex === -1 || endIndex === -1) return [];
-
-      const minIndex = Math.min(startIndex, endIndex);
-      const maxIndex = Math.max(startIndex, endIndex);
-
-      return sortedSegments.slice(minIndex, maxIndex + 1).map(s => s.id);
-    }, [displaySegments]);
-
-    // Check if segment is in current selection range
-    const isInSelectionRange = useCallback((segmentId: string): boolean => {
-      if (!isRangeSelecting || !rangeStartSegment) return false;
-      const rangeIds = getSegmentsInRange(rangeStartSegment, rangeEndSegment || rangeStartSegment);
-      return rangeIds.includes(segmentId);
-    }, [isRangeSelecting, rangeStartSegment, rangeEndSegment, getSegmentsInRange]);
-
-    // Handle range selection start
-    const handleSegmentMouseDown = (e: React.MouseEvent, segmentId: string) => {
-      if (e.button !== 0) return;
+    // Handle segment click - navigate to description below
+    const handleSegmentClick = (e: React.MouseEvent, segmentId: string) => {
       e.preventDefault();
       e.stopPropagation();
-
-      setRangeStartSegment(segmentId);
-      setRangeEndSegment(segmentId);
-      setIsRangeSelecting(true);
-      setIsDragging(false);
-    };
-
-    // Handle range selection during drag
-    const handleSegmentMouseEnter = (segmentId: string, element: HTMLDivElement | null) => {
-      if (isRangeSelecting && rangeStartSegment) {
-        if (segmentId !== rangeStartSegment) {
-          setIsDragging(true);
-        }
-        setRangeEndSegment(segmentId);
-      } else {
-        setHoveredSegment(segmentId);
-        updateTooltipPosition(element);
-      }
-    };
-
-    // Update tooltip position based on element
-    const updateTooltipPosition = (element: HTMLDivElement | null) => {
-      if (element) {
-        const rect = element.getBoundingClientRect();
-        setTooltipPosition({
-          x: rect.left + rect.width / 2,
-          y: rect.top,
-        });
-      }
-    };
-
-    // Handle mouse move to update tooltip position during scroll
-    const handleSegmentMouseMove = (element: HTMLDivElement | null) => {
-      if (!isRangeSelecting) {
-        updateTooltipPosition(element);
-      }
-    };
-
-    // Handle range selection end - global mouse up handler
-    useEffect(() => {
-      const handleGlobalMouseUp = () => {
-        if (!isRangeSelecting || !rangeStartSegment) return;
-
-        // No actions in preview mode - just reset state
-        if (mode === "preview") {
-          setRangeStartSegment(null);
-          setRangeEndSegment(null);
-          setIsRangeSelecting(false);
-          setIsDragging(false);
-          return;
-        }
-
-        const rangeIds = getSegmentsInRange(rangeStartSegment, rangeEndSegment);
-        const rangeSegments = rangeIds.map(id => segments.find(s => s.id === id)).filter(Boolean) as Segment[];
-
-        if (rangeIds.length === 1 && !isDragging) {
-          // Single click - check if segment is selected or not
-          const segment = displaySegments.find(s => s.id === rangeStartSegment);
-          if (segment) {
-            if (mode === "full" && !segment.isSelected) {
-              // Show confirmation modal before adding
-              setAddConfirmSegment(segment);
-            } else {
-              // Already selected or in edited mode - show details
-              setSelectedSegmentDetail(segment);
-            }
-          }
-        } else if (rangeIds.length > 1 && onSelectRange) {
-          // Range selection - show confirmation modal
-          const notSelectedSegments = rangeSegments.filter(s => !s.isSelected);
-          if (notSelectedSegments.length > 0) {
-            // Some segments not selected - show confirmation
-            setRangeConfirmSegments(rangeSegments);
-          } else {
-            // All already selected - just show details of first
-            const firstSeg = rangeSegments[0];
-            if (firstSeg) {
-              setSelectedSegmentDetail(firstSeg);
-            }
-          }
-        }
-
-        // Reset range selection state
-        setRangeStartSegment(null);
-        setRangeEndSegment(null);
-        setIsRangeSelecting(false);
-        setIsDragging(false);
-      };
-
-      if (isRangeSelecting) {
-        document.addEventListener('mouseup', handleGlobalMouseUp);
-        return () => document.removeEventListener('mouseup', handleGlobalMouseUp);
-      }
-    }, [isRangeSelecting, rangeStartSegment, rangeEndSegment, isDragging, displaySegments, segments, mode, onSelectRange, getSegmentsInRange]);
-
-    // Cancel range selection if mouse leaves timeline
-    const handleTimelineMouseLeave = () => {
-      // Don't cancel if actively dragging
+      onSegmentClick?.(segmentId);
     };
 
     // Handle scrubbing on ruler (drag to seek)
@@ -936,10 +454,6 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
 
       return calculatedGaps;
     }, [displaySegments, mode]);
-
-    // Hovered gap state
-    const [hoveredGap, setHoveredGap] = useState<Gap | null>(null);
-    const [gapTooltipPosition, setGapTooltipPosition] = useState<{ x: number; y: number } | null>(null);
 
     // Calculate segment position for edited mode
     const getSegmentPosition = (segment: Segment, index: number) => {
@@ -1167,7 +681,6 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
           ref={timelineRef}
           className="overflow-x-auto overflow-y-hidden timeline-scroll"
           onScroll={handleScroll}
-          onMouseLeave={handleTimelineMouseLeave}
           style={{
             scrollbarWidth: 'thin',
             scrollbarColor: '#3f3f46 #18181b',
@@ -1202,7 +715,6 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
               {gaps.map((gap, index) => {
                 const gapWidth = gap.duration * pixelsPerSecond;
                 const gapLeft = gap.startTime * pixelsPerSecond;
-                const isGapHovered = hoveredGap === gap;
 
                 // Only render if gap is visible (min 4px width)
                 if (gapWidth < 4) return null;
@@ -1210,53 +722,25 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                 return (
                   <div
                     key={`gap-${index}`}
-                    className={cn(
-                      "absolute top-1/2 -translate-y-1/2 cursor-pointer transition-all duration-200",
-                      isGapHovered ? "z-15" : "z-5"
-                    )}
+                    className="absolute top-1/2 -translate-y-1/2 z-5"
                     style={{
                       left: `${gapLeft}px`,
                       width: `${gapWidth}px`,
                     }}
-                    onMouseEnter={(e) => {
-                      setHoveredGap(gap);
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      setGapTooltipPosition({
-                        x: rect.left + rect.width / 2,
-                        y: rect.top,
-                      });
-                    }}
-                    onMouseLeave={() => {
-                      setHoveredGap(null);
-                      setGapTooltipPosition(null);
-                    }}
                   >
                     {/* Gap Visual - Striped Pattern */}
                     <div
-                      className={cn(
-                        "h-8 rounded border border-dashed transition-all duration-200",
-                        isGapHovered
-                          ? "border-red-400/60 bg-red-500/20"
-                          : "border-zinc-600/40 bg-zinc-800/30"
-                      )}
+                      className="h-8 rounded border border-dashed border-zinc-600/40 bg-zinc-800/30"
                       style={{
-                        backgroundImage: isGapHovered
-                          ? "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(239, 68, 68, 0.15) 4px, rgba(239, 68, 68, 0.15) 8px)"
-                          : "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(113, 113, 122, 0.15) 4px, rgba(113, 113, 122, 0.15) 8px)",
+                        backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(113, 113, 122, 0.15) 4px, rgba(113, 113, 122, 0.15) 8px)",
                       }}
                     >
                       {/* Gap Label - only show if wide enough */}
                       {gapWidth > 40 && (
                         <div className="h-full flex items-center justify-center gap-1">
-                          <Scissors className={cn(
-                            "h-3 w-3",
-                            isGapHovered ? "text-red-400" : "text-zinc-500"
-                          )} />
+                          <Scissors className="h-3 w-3 text-zinc-500" />
                           {gapWidth > 60 && (
-                            <span className={cn(
-                              "text-[9px] font-medium",
-                              isGapHovered ? "text-red-400" : "text-zinc-500"
-                            )}>
+                            <span className="text-[9px] font-medium text-zinc-500">
                               {formatTime(gap.duration)}
                             </span>
                           )}
@@ -1270,9 +754,7 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
               {/* Segments */}
               {displaySegments.map((segment, index) => {
                 const { left, width } = getSegmentPosition(segment, index);
-                const analysis = segment.analysis as SegmentAnalysis | null;
                 const isHovered = hoveredSegment === segment.id;
-                const inSelectionRange = isInSelectionRange(segment.id);
                 const inFocus = isInPreviewFocus(segment.id);
 
                 return (
@@ -1281,15 +763,13 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                     data-segment-id={segment.id}
                     className={cn(
                       "absolute rounded cursor-pointer border select-none shadow-sm transition-all duration-300",
-                      inSelectionRange
-                        ? "bg-blue-400 border-blue-300 opacity-100 ring-2 ring-blue-300/50"
-                        : getSegmentColor(segment),
-                      !inSelectionRange && getSegmentBorderColor(segment),
-                      !inSelectionRange && (segment.isSelected ? "opacity-100" : "opacity-70"),
+                      getSegmentColor(segment),
+                      getSegmentBorderColor(segment),
+                      segment.isSelected ? "opacity-100" : "opacity-70",
                       // Preview focus styling - dim segments not in focus
                       !inFocus && "opacity-30 grayscale",
                       inFocus && mode === "preview" && "ring-2 ring-violet-500/50 shadow-lg shadow-violet-500/20",
-                      isHovered && !isRangeSelecting && "ring-1 ring-white/30 shadow-md shadow-black/30 z-20"
+                      isHovered && "ring-1 ring-white/30 shadow-md shadow-black/30 z-20"
                     )}
                     style={{
                       left: `${left + 1}px`,
@@ -1297,8 +777,8 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                     }}
                     initial={false}
                     animate={{
-                      top: isHovered && !isRangeSelecting ? 2 : 4,
-                      height: isHovered && !isRangeSelecting ? "calc(100% - 4px)" : "calc(100% - 8px)",
+                      top: isHovered ? 2 : 4,
+                      height: isHovered ? "calc(100% - 4px)" : "calc(100% - 8px)",
                     }}
                     transition={{
                       type: "spring",
@@ -1306,15 +786,9 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                       damping: 30,
                       mass: 0.3
                     }}
-                    onMouseDown={(e) => handleSegmentMouseDown(e, segment.id)}
-                    onMouseEnter={(e) => handleSegmentMouseEnter(segment.id, e.currentTarget as HTMLDivElement)}
-                    onMouseMove={(e) => handleSegmentMouseMove(e.currentTarget as HTMLDivElement)}
-                    onMouseLeave={() => {
-                      if (!isRangeSelecting) {
-                        setHoveredSegment(null);
-                        setTooltipPosition(null);
-                      }
-                    }}
+                    onClick={(e) => handleSegmentClick(e, segment.id)}
+                    onMouseEnter={() => setHoveredSegment(segment.id)}
+                    onMouseLeave={() => setHoveredSegment(null)}
                   >
                     {/* Wave Spectrum Background */}
                     <div className="absolute inset-0 flex items-end justify-around px-0.5 pb-1 overflow-hidden opacity-60">
@@ -1377,160 +851,6 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
           </div>
         </div>
 
-        {/* Compact Legend (only show when range selecting) */}
-        {isRangeSelecting && (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border-t border-blue-500/30 text-[10px]">
-            <MousePointer2 className="h-3 w-3 text-blue-400 animate-pulse" />
-            <span className="text-blue-400">Selecionando range...</span>
-          </div>
-        )}
-
-        {/* Segment Detail Modal */}
-        <AnimatePresence>
-          {selectedSegmentDetail && (
-            <SegmentDetail
-              segment={selectedSegmentDetail}
-              isOpen={true}
-              onClose={() => setSelectedSegmentDetail(null)}
-              onToggleSelect={() => {
-                onToggleSelect(selectedSegmentDetail.id);
-                setSelectedSegmentDetail(null);
-              }}
-              onPlay={() => {
-                const audio = audioRef.current;
-                if (audio) {
-                  audio.currentTime = selectedSegmentDetail.startTime;
-                  audio.play();
-                }
-              }}
-              formatTime={formatTime}
-            />
-          )}
-        </AnimatePresence>
-
-        {/* Add Confirmation Modal */}
-        <AnimatePresence>
-          {addConfirmSegment && (
-            <AddConfirmModal
-              segment={addConfirmSegment}
-              isOpen={true}
-              onClose={() => setAddConfirmSegment(null)}
-              onConfirm={() => {
-                onToggleSelect(addConfirmSegment.id);
-              }}
-              onPlay={() => {
-                const audio = audioRef.current;
-                if (audio) {
-                  audio.currentTime = addConfirmSegment.startTime;
-                  audio.play();
-                }
-              }}
-              formatTime={formatTime}
-            />
-          )}
-        </AnimatePresence>
-
-        {/* Range Confirmation Modal */}
-        <AnimatePresence>
-          {rangeConfirmSegments.length > 0 && (
-            <RangeConfirmModal
-              segments={rangeConfirmSegments}
-              isOpen={true}
-              onClose={() => setRangeConfirmSegments([])}
-              onConfirm={() => {
-                if (onSelectRange) {
-                  onSelectRange(rangeConfirmSegments.map(s => s.id), true);
-                }
-              }}
-              formatTime={formatTime}
-            />
-          )}
-        </AnimatePresence>
-
-        {/* Tooltip Portal - renders outside the overflow container */}
-        {typeof document !== 'undefined' && hoveredSegment && tooltipPosition && !isRangeSelecting && createPortal(
-          <AnimatePresence>
-            {(() => {
-              const segment = displaySegments.find(s => s.id === hoveredSegment);
-              if (!segment) return null;
-              return (
-                <motion.div
-                  key="tooltip"
-                  initial={{ opacity: 0, y: 5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 5 }}
-                  transition={{ duration: 0.15 }}
-                  className="fixed pointer-events-none -translate-x-1/2"
-                  style={{
-                    left: tooltipPosition.x,
-                    bottom: `calc(100vh - ${tooltipPosition.y}px + 10px)`,
-                    zIndex: 9999,
-                  }}
-                >
-                  <div className="bg-zinc-900/95 backdrop-blur-md border border-zinc-700/80 rounded-lg px-3 py-2 shadow-xl max-w-[280px] min-w-[150px]">
-                    {/* Topic */}
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-semibold text-white truncate">
-                        {segment.topic || "Sem tópico"}
-                      </span>
-                    </div>
-                    {/* Text preview */}
-                    <p className="text-[11px] text-zinc-400 line-clamp-2 leading-relaxed">
-                      {segment.text?.slice(0, 120)}{segment.text && segment.text.length > 120 ? "..." : ""}
-                    </p>
-                    {/* Time */}
-                    <div className="flex items-center gap-2 mt-1.5 text-[10px] text-zinc-500">
-                      <span>{formatTime(segment.startTime)} - {formatTime(segment.endTime)}</span>
-                      <span className="text-zinc-600">•</span>
-                      <span>{formatTime(segment.endTime - segment.startTime)}</span>
-                    </div>
-                    {/* Arrow */}
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent border-t-zinc-700/80" />
-                  </div>
-                </motion.div>
-              );
-            })()}
-          </AnimatePresence>,
-          document.body
-        )}
-
-        {/* Gap Tooltip Portal */}
-        {typeof document !== 'undefined' && hoveredGap && gapTooltipPosition && createPortal(
-          <AnimatePresence>
-            <motion.div
-              key="gap-tooltip"
-              initial={{ opacity: 0, y: 5 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 5 }}
-              transition={{ duration: 0.15 }}
-              className="fixed pointer-events-none -translate-x-1/2"
-              style={{
-                left: gapTooltipPosition.x,
-                bottom: `calc(100vh - ${gapTooltipPosition.y}px + 10px)`,
-                zIndex: 9999,
-              }}
-            >
-              <div className="bg-zinc-900/95 backdrop-blur-md border border-red-500/40 rounded-lg px-3 py-2 shadow-xl">
-                {/* Gap Info */}
-                <div className="flex items-center gap-2 mb-1">
-                  <Scissors className="h-3 w-3 text-red-400" />
-                  <span className="text-xs font-semibold text-red-400">
-                    Conteúdo Removido
-                  </span>
-                </div>
-                {/* Duration */}
-                <div className="flex items-center gap-2 text-[10px] text-zinc-400">
-                  <span>{formatTime(hoveredGap.startTime)} - {formatTime(hoveredGap.endTime)}</span>
-                  <span className="text-zinc-600">•</span>
-                  <span className="text-red-400 font-medium">{formatTime(hoveredGap.duration)}</span>
-                </div>
-                {/* Arrow */}
-                <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-l-transparent border-r-transparent border-t-red-500/40" />
-              </div>
-            </motion.div>
-          </AnimatePresence>,
-          document.body
-        )}
       </div>
     );
   }
