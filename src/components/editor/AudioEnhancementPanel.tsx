@@ -46,6 +46,58 @@ export function AudioEnhancementPanel({
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
+  // Default presets
+  const defaultPresets: EnhancementPreset[] = [
+    {
+      id: "podcast_standard",
+      name: "Podcast Padrao",
+      description: "Configuracao otimizada para podcasts",
+      settings: {
+        normalize: { enabled: true, targetLufs: -16 },
+        denoise: { enabled: true, strength: "medium" },
+        eq: { enabled: true, preset: "voice" },
+        compress: { enabled: true, preset: "medium" },
+        removeFillers: false,
+      },
+    },
+    {
+      id: "voice_clarity",
+      name: "Voz Clara",
+      description: "Maximiza clareza da voz",
+      settings: {
+        normalize: { enabled: true, targetLufs: -14 },
+        denoise: { enabled: true, strength: "aggressive" },
+        eq: { enabled: true, preset: "clarity" },
+        compress: { enabled: true, preset: "light" },
+        removeFillers: false,
+      },
+    },
+    {
+      id: "broadcast_ready",
+      name: "Pronto para Radio",
+      description: "Niveis consistentes estilo broadcast",
+      settings: {
+        normalize: { enabled: true, targetLufs: -16 },
+        denoise: { enabled: true, strength: "medium" },
+        eq: { enabled: true, preset: "warmth" },
+        compress: { enabled: true, preset: "broadcast" },
+        removeFillers: false,
+      },
+    },
+    {
+      id: "minimal",
+      name: "Minimo",
+      description: "Apenas normalizacao basica",
+      settings: {
+        normalize: { enabled: true, targetLufs: -16 },
+        denoise: { enabled: false, strength: "light" },
+        eq: { enabled: false, preset: "voice" },
+        compress: { enabled: false, preset: "light" },
+        removeFillers: false,
+      },
+    },
+  ];
+
   // Custom settings
   const [settings, setSettings] = useState<{
     normalize: { enabled: boolean; targetLufs: number };
@@ -74,13 +126,19 @@ export function AudioEnhancementPanel({
       if (data.success) {
         setIsEnhanced(data.isEnhanced);
         setEnhancedUrl(data.enhancedAudioUrl);
-        setPresets(data.presets);
+        // Use presets from API or default
+        setPresets(data.presets?.length > 0 ? data.presets : defaultPresets);
         if (data.currentSettings) {
           setSettings(data.currentSettings);
         }
+      } else {
+        // Use default presets if API fails
+        setPresets(defaultPresets);
       }
     } catch (error) {
       console.error("Error loading enhancement status:", error);
+      // Use default presets on error
+      setPresets(defaultPresets);
     }
   };
 

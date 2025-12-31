@@ -27,8 +27,17 @@ import {
   Award,
   HelpCircle,
   Layers,
+  Info,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+// Interface for section summaries
+interface SectionSummary {
+  sectionId: string;
+  summary: string;
+  isLoading: boolean;
+}
 import { Progress } from "@/components/ui/progress";
 
 // Section with its segments
@@ -40,30 +49,32 @@ interface SectionWithSegments {
 interface EditorCanvasProps {
   segments: Segment[];
   sections?: SectionWithSegments[];
-  selectedSegmentId?: string;
+  highlightedSegmentId?: string;
   currentTime: number;
   isPlaying?: boolean;
   onSeekTo: (time: number) => void;
-  onSelectSegment: (segmentId: string) => void;
+  onToggleSelect: (segmentId: string) => void;
+  onSegmentClick?: (segmentId: string) => void; // For sync with timeline (no toggle)
+  onPlaySegment?: (segmentId: string) => void; // Play segment from start
   projectTitle?: string;
   originalDuration?: number;
   className?: string;
 }
 
-// Section type icons and colors
-const SECTION_CONFIG: Record<string, { icon: React.ElementType; color: string; bgColor: string }> = {
-  "introducao": { icon: Mic, color: "text-blue-400", bgColor: "bg-blue-500/20" },
-  "intro": { icon: Mic, color: "text-blue-400", bgColor: "bg-blue-500/20" },
-  "hook": { icon: Zap, color: "text-amber-400", bgColor: "bg-amber-500/20" },
-  "contexto": { icon: BookOpen, color: "text-cyan-400", bgColor: "bg-cyan-500/20" },
-  "desenvolvimento": { icon: Layers, color: "text-emerald-400", bgColor: "bg-emerald-500/20" },
-  "conteudo": { icon: FileText, color: "text-emerald-400", bgColor: "bg-emerald-500/20" },
-  "solucao": { icon: Target, color: "text-purple-400", bgColor: "bg-purple-500/20" },
-  "exemplo": { icon: MessageSquare, color: "text-orange-400", bgColor: "bg-orange-500/20" },
-  "conclusao": { icon: Award, color: "text-pink-400", bgColor: "bg-pink-500/20" },
-  "cta": { icon: Zap, color: "text-red-400", bgColor: "bg-red-500/20" },
-  "encerramento": { icon: Award, color: "text-pink-400", bgColor: "bg-pink-500/20" },
-  "default": { icon: HelpCircle, color: "text-zinc-400", bgColor: "bg-zinc-500/20" },
+// Section type icons and colors - with stronger header backgrounds for hierarchy
+const SECTION_CONFIG: Record<string, { icon: React.ElementType; color: string; bgColor: string; headerBg: string; borderColor: string }> = {
+  "introducao": { icon: Mic, color: "text-blue-400", bgColor: "bg-blue-500/20", headerBg: "bg-gradient-to-r from-blue-600/40 via-blue-500/20 to-transparent", borderColor: "border-l-blue-500" },
+  "intro": { icon: Mic, color: "text-blue-400", bgColor: "bg-blue-500/20", headerBg: "bg-gradient-to-r from-blue-600/40 via-blue-500/20 to-transparent", borderColor: "border-l-blue-500" },
+  "hook": { icon: Zap, color: "text-amber-400", bgColor: "bg-amber-500/20", headerBg: "bg-gradient-to-r from-amber-600/40 via-amber-500/20 to-transparent", borderColor: "border-l-amber-500" },
+  "contexto": { icon: BookOpen, color: "text-cyan-400", bgColor: "bg-cyan-500/20", headerBg: "bg-gradient-to-r from-cyan-600/40 via-cyan-500/20 to-transparent", borderColor: "border-l-cyan-500" },
+  "desenvolvimento": { icon: Layers, color: "text-emerald-400", bgColor: "bg-emerald-500/20", headerBg: "bg-gradient-to-r from-emerald-600/40 via-emerald-500/20 to-transparent", borderColor: "border-l-emerald-500" },
+  "conteudo": { icon: FileText, color: "text-emerald-400", bgColor: "bg-emerald-500/20", headerBg: "bg-gradient-to-r from-emerald-600/40 via-emerald-500/20 to-transparent", borderColor: "border-l-emerald-500" },
+  "solucao": { icon: Target, color: "text-purple-400", bgColor: "bg-purple-500/20", headerBg: "bg-gradient-to-r from-purple-600/40 via-purple-500/20 to-transparent", borderColor: "border-l-purple-500" },
+  "exemplo": { icon: MessageSquare, color: "text-orange-400", bgColor: "bg-orange-500/20", headerBg: "bg-gradient-to-r from-orange-600/40 via-orange-500/20 to-transparent", borderColor: "border-l-orange-500" },
+  "conclusao": { icon: Award, color: "text-pink-400", bgColor: "bg-pink-500/20", headerBg: "bg-gradient-to-r from-pink-600/40 via-pink-500/20 to-transparent", borderColor: "border-l-pink-500" },
+  "cta": { icon: Zap, color: "text-red-400", bgColor: "bg-red-500/20", headerBg: "bg-gradient-to-r from-red-600/40 via-red-500/20 to-transparent", borderColor: "border-l-red-500" },
+  "encerramento": { icon: Award, color: "text-pink-400", bgColor: "bg-pink-500/20", headerBg: "bg-gradient-to-r from-pink-600/40 via-pink-500/20 to-transparent", borderColor: "border-l-pink-500" },
+  "default": { icon: HelpCircle, color: "text-zinc-400", bgColor: "bg-zinc-500/20", headerBg: "bg-gradient-to-r from-zinc-600/40 via-zinc-500/20 to-transparent", borderColor: "border-l-zinc-500" },
 };
 
 function getSectionConfig(name: string) {
@@ -74,16 +85,20 @@ function getSectionConfig(name: string) {
 export function EditorCanvas({
   segments,
   sections,
-  selectedSegmentId,
+  highlightedSegmentId,
   currentTime,
   isPlaying = false,
   onSeekTo,
-  onSelectSegment,
+  onToggleSelect,
+  onSegmentClick,
+  onPlaySegment,
   projectTitle,
   originalDuration = 0,
   className,
 }: EditorCanvasProps) {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [expandedSummaries, setExpandedSummaries] = useState<Set<string>>(new Set());
+  const [sectionSummaries, setSectionSummaries] = useState<Record<string, SectionSummary>>({});
   const segmentRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
   const lastScrolledSegmentId = useRef<string | null>(null);
@@ -114,12 +129,6 @@ export function EditorCanvas({
       reduction: totalDuration > 0 ? ((totalDuration - selectedDuration) / totalDuration) * 100 : 0,
     };
   }, [segments]);
-
-  // Get selected segment details
-  const selectedSegment = useMemo(
-    () => segments.find((s) => s.id === selectedSegmentId),
-    [segments, selectedSegmentId]
-  );
 
   // Get current segment based on time
   const currentSegment = useMemo(
@@ -163,6 +172,22 @@ export function EditorCanvas({
     }
   }, [isPlaying]);
 
+  // Scroll to highlighted segment when it changes (from timeline)
+  useEffect(() => {
+    if (!highlightedSegmentId) return;
+
+    // Don't scroll if we're playing (the other effect handles that)
+    if (isPlaying) return;
+
+    const segmentElement = segmentRefs.current.get(highlightedSegmentId);
+    if (segmentElement && containerRef.current) {
+      segmentElement.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+  }, [highlightedSegmentId, isPlaying]);
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -181,9 +206,90 @@ export function EditorCanvas({
     });
   };
 
+  // Toggle summary visibility and generate if needed
+  const toggleSummary = async (sectionId: string, sectionSegments: Segment[]) => {
+    const isExpanded = expandedSummaries.has(sectionId);
+
+    if (isExpanded) {
+      // Just collapse
+      setExpandedSummaries(prev => {
+        const next = new Set(prev);
+        next.delete(sectionId);
+        return next;
+      });
+      return;
+    }
+
+    // Expand and generate summary if not already cached
+    setExpandedSummaries(prev => {
+      const next = new Set(prev);
+      next.add(sectionId);
+      return next;
+    });
+
+    // Check if we already have a summary
+    if (sectionSummaries[sectionId]?.summary) {
+      return;
+    }
+
+    // Generate summary
+    setSectionSummaries(prev => ({
+      ...prev,
+      [sectionId]: { sectionId, summary: "", isLoading: true }
+    }));
+
+    try {
+      // Combine segment texts for summary generation
+      const fullText = sectionSegments.map(s => s.text).join(" ");
+
+      // Call API to generate summary
+      const response = await fetch("/api/ai/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: fullText,
+          maxWords: 200,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setSectionSummaries(prev => ({
+          ...prev,
+          [sectionId]: { sectionId, summary: data.summary, isLoading: false }
+        }));
+      } else {
+        // Fallback: generate a simple summary from topics and key insights
+        const topics = [...new Set(sectionSegments.map(s => s.topic).filter(Boolean))];
+        const insights = sectionSegments.map(s => s.keyInsight).filter(Boolean);
+        const fallbackSummary = topics.length > 0
+          ? `Esta secao aborda os seguintes topicos: ${topics.join(", ")}. ${insights.length > 0 ? `Principais insights: ${insights.slice(0, 3).join("; ")}` : ""}`
+          : `Secao com ${sectionSegments.length} segmentos de audio. Duracao total: ${formatTime(sectionSegments.reduce((sum, s) => sum + (s.endTime - s.startTime), 0))}.`;
+
+        setSectionSummaries(prev => ({
+          ...prev,
+          [sectionId]: { sectionId, summary: fallbackSummary, isLoading: false }
+        }));
+      }
+    } catch (error) {
+      console.error("Error generating summary:", error);
+      // Fallback summary
+      const topics = [...new Set(sectionSegments.map(s => s.topic).filter(Boolean))];
+      const fallbackSummary = topics.length > 0
+        ? `Topicos abordados: ${topics.join(", ")}.`
+        : `Secao com ${sectionSegments.length} segmentos.`;
+
+      setSectionSummaries(prev => ({
+        ...prev,
+        [sectionId]: { sectionId, summary: fallbackSummary, isLoading: false }
+      }));
+    }
+  };
+
   // Render a single segment item
   const renderSegmentItem = (segment: Segment, index: number, globalIndex: number) => {
     const isCurrentSegment = currentSegment?.id === segment.id;
+    const isHighlightedFromTimeline = highlightedSegmentId === segment.id && !isCurrentSegment;
     const segmentDuration = segment.endTime - segment.startTime;
     const progressPercent = isCurrentSegment ? segmentProgress : 0;
 
@@ -210,12 +316,16 @@ export function EditorCanvas({
         )}
 
         <button
-          onClick={() => onSelectSegment(segment.id)}
+          onClick={() => {
+            // Call onSegmentClick for sync (highlight in timeline), not toggle
+            onSegmentClick?.(segment.id);
+          }}
           className={cn(
             "w-full px-6 py-4 flex items-start gap-4 hover:bg-zinc-900/80 transition-all text-left group relative z-10",
             isCurrentSegment && "bg-emerald-500/5 border-l-4 border-emerald-500 shadow-lg shadow-emerald-500/10",
-            !isCurrentSegment && currentSegment && "opacity-50",
-            !segment.isSelected && "opacity-60"
+            isHighlightedFromTimeline && "bg-blue-500/10 border-l-4 border-blue-500 shadow-lg shadow-blue-500/10",
+            !isCurrentSegment && !isHighlightedFromTimeline && currentSegment && "opacity-50",
+            !segment.isSelected && !isHighlightedFromTimeline && "opacity-60"
           )}
         >
           {/* Playing indicator for current segment */}
@@ -235,21 +345,33 @@ export function EditorCanvas({
             </motion.div>
           )}
 
-          {/* Segment Number */}
+          {/* Segment Number / Play Button */}
           <div
+            onClick={(e) => {
+              if (!isCurrentSegment && onPlaySegment) {
+                e.stopPropagation();
+                onPlaySegment(segment.id);
+              }
+            }}
             className={cn(
               "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm font-semibold transition-all",
               isCurrentSegment
                 ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/30"
+                : isHighlightedFromTimeline
+                ? "bg-blue-500 text-white shadow-lg shadow-blue-500/30 cursor-pointer hover:bg-blue-600"
                 : segment.isSelected
-                ? "bg-emerald-500/20 text-emerald-400"
-                : "bg-zinc-800 text-zinc-500 group-hover:bg-zinc-700"
+                ? "bg-emerald-500/20 text-emerald-400 cursor-pointer hover:bg-emerald-500/30"
+                : "bg-zinc-800 text-zinc-500 cursor-pointer hover:bg-emerald-500 hover:text-white"
             )}
+            title={isCurrentSegment ? "Reproduzindo" : "Reproduzir segmento"}
           >
             {isCurrentSegment ? (
               <Volume2 className="h-4 w-4 animate-pulse" />
             ) : (
-              globalIndex + 1
+              <span className="group-hover:hidden">{globalIndex + 1}</span>
+            )}
+            {!isCurrentSegment && (
+              <Play className="h-4 w-4 hidden group-hover:block" />
             )}
           </div>
 
@@ -321,7 +443,7 @@ export function EditorCanvas({
             )}
           </div>
 
-          {/* Status indicator */}
+          {/* Status indicator - clickable for toggle */}
           <div className="flex items-center gap-2 shrink-0">
             {isCurrentSegment ? (
               <div className="flex items-center gap-2">
@@ -342,10 +464,21 @@ export function EditorCanvas({
                   ))}
                 </div>
               </div>
-            ) : segment.isSelected ? (
-              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
             ) : (
-              <XCircle className="h-5 w-5 text-zinc-600" />
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleSelect(segment.id);
+                }}
+                className="p-1 rounded-full hover:bg-zinc-800 cursor-pointer transition-colors"
+                title={segment.isSelected ? "Remover da selecao" : "Adicionar a selecao"}
+              >
+                {segment.isSelected ? (
+                  <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                ) : (
+                  <XCircle className="h-5 w-5 text-zinc-600 hover:text-zinc-400" />
+                )}
+              </div>
             )}
             <ChevronRight className="h-4 w-4 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
           </div>
@@ -353,177 +486,6 @@ export function EditorCanvas({
       </div>
     );
   };
-
-  // If a segment is selected, show segment details
-  if (selectedSegment) {
-    const analysis = selectedSegment.analysis as {
-      topic?: string;
-      interestScore?: number;
-      clarityScore?: number;
-      keyInsight?: string;
-      isTangent?: boolean;
-      isRepetition?: boolean;
-      hasFactualError?: boolean;
-      hasContradiction?: boolean;
-      needsRerecord?: boolean;
-      rerecordSuggestion?: string;
-    } | null;
-
-    return (
-      <div className={cn("flex flex-col h-full bg-zinc-950 p-6 overflow-auto", className)}>
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <div
-              className={cn(
-                "w-3 h-3 rounded-full",
-                selectedSegment.isSelected ? "bg-emerald-500" : "bg-zinc-600"
-              )}
-            />
-            <h2 className="text-lg font-semibold text-white">
-              Segmento {segments.indexOf(selectedSegment) + 1}
-            </h2>
-            <span className="text-sm text-zinc-500">
-              {formatTime(selectedSegment.startTime)} -{" "}
-              {formatTime(selectedSegment.endTime)}
-            </span>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onSeekTo(selectedSegment.startTime)}
-            className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
-          >
-            <Play className="h-4 w-4 mr-2" />
-            Ouvir
-          </Button>
-        </div>
-
-        {/* Content Grid */}
-        <div className="grid grid-cols-2 gap-6 flex-1">
-          {/* Left Column - Transcription */}
-          <div className="space-y-4">
-            <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
-              <h3 className="text-sm font-medium text-zinc-400 mb-3 flex items-center gap-2">
-                <FileText className="h-4 w-4" />
-                Transcricao
-              </h3>
-              <p className="text-white text-sm leading-relaxed">
-                {selectedSegment.text}
-              </p>
-            </div>
-
-            {/* Topic */}
-            {analysis?.topic && (
-              <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
-                <h3 className="text-sm font-medium text-zinc-400 mb-2">Topico</h3>
-                <p className="text-emerald-400 font-medium">{analysis.topic}</p>
-              </div>
-            )}
-
-            {/* Key Insight */}
-            {analysis?.keyInsight && (
-              <div className="bg-amber-500/10 rounded-lg p-4 border border-amber-500/20">
-                <h3 className="text-sm font-medium text-amber-400 mb-2 flex items-center gap-2">
-                  <Lightbulb className="h-4 w-4" />
-                  Insight Principal
-                </h3>
-                <p className="text-amber-200 text-sm">{analysis.keyInsight}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Right Column - Analysis */}
-          <div className="space-y-4">
-            {/* Scores */}
-            <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
-              <h3 className="text-sm font-medium text-zinc-400 mb-4 flex items-center gap-2">
-                <BarChart3 className="h-4 w-4" />
-                Analise
-              </h3>
-              <div className="space-y-4">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-zinc-500">Interesse</span>
-                    <span className="text-xs font-medium text-emerald-400">
-                      {selectedSegment.interestScore || 0}/10
-                    </span>
-                  </div>
-                  <Progress
-                    value={(selectedSegment.interestScore || 0) * 10}
-                    className="h-2 bg-zinc-800"
-                  />
-                </div>
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-zinc-500">Clareza</span>
-                    <span className="text-xs font-medium text-blue-400">
-                      {selectedSegment.clarityScore || 0}/10
-                    </span>
-                  </div>
-                  <Progress
-                    value={(selectedSegment.clarityScore || 0) * 10}
-                    className="h-2 bg-zinc-800"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Flags */}
-            <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
-              <h3 className="text-sm font-medium text-zinc-400 mb-3">Status</h3>
-              <div className="flex flex-wrap gap-2">
-                {selectedSegment.isSelected ? (
-                  <span className="px-2 py-1 rounded-full text-xs bg-emerald-500/20 text-emerald-400 flex items-center gap-1">
-                    <CheckCircle2 className="h-3 w-3" />
-                    Selecionado
-                  </span>
-                ) : (
-                  <span className="px-2 py-1 rounded-full text-xs bg-zinc-700 text-zinc-400 flex items-center gap-1">
-                    <XCircle className="h-3 w-3" />
-                    Nao selecionado
-                  </span>
-                )}
-                {analysis?.isTangent && (
-                  <span className="px-2 py-1 rounded-full text-xs bg-orange-500/20 text-orange-400">
-                    Tangente
-                  </span>
-                )}
-                {analysis?.isRepetition && (
-                  <span className="px-2 py-1 rounded-full text-xs bg-yellow-500/20 text-yellow-400">
-                    Repeticao
-                  </span>
-                )}
-                {analysis?.hasFactualError && (
-                  <span className="px-2 py-1 rounded-full text-xs bg-red-500/20 text-red-400">
-                    Erro Factual
-                  </span>
-                )}
-                {analysis?.needsRerecord && (
-                  <span className="px-2 py-1 rounded-full text-xs bg-purple-500/20 text-purple-400">
-                    Regravar
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Rerecord suggestion */}
-            {analysis?.needsRerecord && analysis?.rerecordSuggestion && (
-              <div className="bg-purple-500/10 rounded-lg p-4 border border-purple-500/20">
-                <h3 className="text-sm font-medium text-purple-400 mb-2 flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4" />
-                  Sugestao para Regravar
-                </h3>
-                <p className="text-purple-200 text-sm">
-                  {analysis.rerecordSuggestion}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   // Default view - Project Overview with Sections
   return (
@@ -629,59 +591,121 @@ export function EditorCanvas({
               }
 
               return (
-                <div key={sectionData.section.id} className="border-b border-zinc-800">
-                  {/* Section Header */}
+                <div key={sectionData.section.id} className="border-b border-zinc-800/50">
+                  {/* Section Header - Highlighted with gradient background */}
                   <button
                     onClick={() => toggleSection(sectionData.section.id)}
-                    className="w-full px-6 py-4 flex items-center gap-4 hover:bg-zinc-900/50 transition-colors"
+                    className={cn(
+                      "w-full px-6 py-5 flex items-center gap-4 transition-all border-l-4",
+                      config.headerBg,
+                      config.borderColor,
+                      "hover:brightness-110"
+                    )}
                   >
                     <div className={cn(
-                      "w-10 h-10 rounded-xl flex items-center justify-center",
+                      "w-12 h-12 rounded-xl flex items-center justify-center shadow-lg",
                       config.bgColor
                     )}>
-                      <Icon className={cn("h-5 w-5", config.color)} />
+                      <Icon className={cn("h-6 w-6", config.color)} />
                     </div>
 
                     <div className="flex-1 text-left">
                       <div className="flex items-center gap-3">
-                        <h3 className="text-base font-semibold text-white">
+                        <h3 className={cn("text-lg font-bold", config.color)}>
                           {sectionData.section.name}
                         </h3>
                         <span className={cn(
-                          "px-2 py-0.5 rounded-full text-xs font-medium",
-                          sectionData.section.status === "approved" && "bg-emerald-500/20 text-emerald-400",
-                          sectionData.section.status === "pending" && "bg-zinc-500/20 text-zinc-400",
-                          sectionData.section.status === "blocked" && "bg-red-500/20 text-red-400",
-                          sectionData.section.status === "review" && "bg-amber-500/20 text-amber-400",
-                          !["approved", "pending", "blocked", "review"].includes(sectionData.section.status || "") && "bg-zinc-500/20 text-zinc-400"
+                          "px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide",
+                          sectionData.section.status === "approved" && "bg-emerald-500/30 text-emerald-300",
+                          sectionData.section.status === "pending" && "bg-zinc-500/30 text-zinc-300",
+                          sectionData.section.status === "blocked" && "bg-red-500/30 text-red-300",
+                          sectionData.section.status === "review" && "bg-amber-500/30 text-amber-300",
+                          !["approved", "pending", "blocked", "review"].includes(sectionData.section.status || "") && "bg-zinc-500/30 text-zinc-300"
                         )}>
                           {sectionData.section.status || "pending"}
                         </span>
                       </div>
-                      <p className="text-xs text-zinc-500 mt-0.5">
+                      <p className="text-sm text-zinc-400 mt-1">
                         {sectionData.segments.length} segmentos • {formatTime(sectionDuration)} • {selectedInSection} selecionados
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-4">
                       {/* Section progress indicator */}
-                      <div className="w-24 h-2 bg-zinc-800 rounded-full overflow-hidden">
+                      <div className="w-28 h-2.5 bg-zinc-800/80 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-emerald-500 rounded-full transition-all"
+                          className={cn("h-full rounded-full transition-all", config.bgColor.replace('/20', ''))}
                           style={{ width: `${sectionData.segments.length > 0 ? (selectedInSection / sectionData.segments.length) * 100 : 0}%` }}
                         />
                       </div>
-                      <span className="text-xs text-zinc-500 w-10">
+                      <span className={cn("text-sm font-medium w-12", config.color)}>
                         {sectionData.segments.length > 0
                           ? Math.round((selectedInSection / sectionData.segments.length) * 100)
                           : 0}%
                       </span>
+                      {/* Summary button */}
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSummary(sectionData.section.id, sectionData.segments);
+                        }}
+                        className={cn(
+                          "p-2 rounded-lg transition-colors cursor-pointer",
+                          expandedSummaries.has(sectionData.section.id)
+                            ? config.bgColor + " " + config.color
+                            : "hover:bg-zinc-800/50 text-zinc-500 hover:text-zinc-300"
+                        )}
+                        title="Ver resumo da secao"
+                      >
+                        <Info className="h-5 w-5" />
+                      </div>
                       <ChevronDown className={cn(
-                        "h-5 w-5 text-zinc-500 transition-transform",
+                        "h-6 w-6 transition-transform",
+                        config.color,
                         isCollapsed && "-rotate-90"
                       )} />
                     </div>
                   </button>
+
+                  {/* Section Summary Panel */}
+                  <AnimatePresence>
+                    {expandedSummaries.has(sectionData.section.id) && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className={cn(
+                          "overflow-hidden border-l-4",
+                          config.borderColor
+                        )}
+                      >
+                        <div className={cn(
+                          "px-6 py-4",
+                          config.bgColor.replace('/20', '/10')
+                        )}>
+                          <div className="flex items-start gap-3">
+                            <Info className={cn("h-5 w-5 mt-0.5 shrink-0", config.color)} />
+                            <div className="flex-1">
+                              <h4 className={cn("text-sm font-semibold mb-2", config.color)}>
+                                Resumo da Secao
+                              </h4>
+                              {sectionSummaries[sectionData.section.id]?.isLoading ? (
+                                <div className="flex items-center gap-2 text-zinc-400">
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  <span className="text-sm">Gerando resumo...</span>
+                                </div>
+                              ) : (
+                                <p className="text-sm text-zinc-300 leading-relaxed">
+                                  {sectionSummaries[sectionData.section.id]?.summary || "Clique para gerar o resumo desta secao."}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   {/* Section Segments */}
                   {!isCollapsed && (

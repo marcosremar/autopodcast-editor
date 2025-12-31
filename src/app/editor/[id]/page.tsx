@@ -65,6 +65,7 @@ export default function EditorPage({ params }: EditorPageProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | undefined>(undefined);
+  const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | undefined>(undefined);
 
   // Fetch user ID for chat persistence
   useEffect(() => {
@@ -527,12 +528,14 @@ export default function EditorPage({ params }: EditorPageProps) {
               ref={timelineRef}
               segments={segments}
               audioUrl={project.enhancedAudioUrl || project.originalAudioUrl}
+              waveformPeaks={project.waveformPeaks as number[] | undefined}
               onToggleSelect={handleToggleSelect}
               onSelectRange={handleSelectRange}
               previewRange={previewRange}
               onPreviewClose={handlePreviewClose}
               onTimeUpdate={handleTimeUpdate}
               onPlayingChange={setIsPlaying}
+              onSegmentClick={(segmentId) => setHighlightedSegmentId(segmentId)}
               className="rounded-none border-0"
             />
           </div>
@@ -602,10 +605,26 @@ export default function EditorPage({ params }: EditorPageProps) {
                     },
                   ];
                 })()}
-                selectedSegmentId={selectedSegmentId}
+                highlightedSegmentId={highlightedSegmentId}
                 currentTime={currentTime}
                 onSeekTo={handleSeekTo}
-                onSelectSegment={(id) => setSelectedSegmentId(id)}
+                onToggleSelect={handleToggleSelect}
+                onSegmentClick={(segmentId) => {
+                  // Sync: highlight in Canvas and seek timeline to segment
+                  setHighlightedSegmentId(segmentId);
+                  const segment = segments.find(s => s.id === segmentId);
+                  if (segment) {
+                    handleSeekTo(segment.startTime);
+                  }
+                }}
+                onPlaySegment={(segmentId) => {
+                  // Play segment from start using timeline
+                  const segment = segments.find(s => s.id === segmentId);
+                  if (segment && timelineRef.current) {
+                    setHighlightedSegmentId(segmentId);
+                    timelineRef.current.playSegment(segment);
+                  }
+                }}
                 projectTitle={project.title}
                 originalDuration={project.originalDuration || 0}
                 className="h-full"

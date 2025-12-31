@@ -267,14 +267,68 @@ export function FillerWordPanel({
             <RefreshCw className="h-6 w-6 text-zinc-500 animate-spin" />
           </div>
         ) : fillers.length === 0 ? (
-          <div className="text-center py-8">
-            <AlertCircle className="h-8 w-8 text-zinc-600 mx-auto mb-3" />
-            <p className="text-zinc-500 text-sm">
-              Nenhum filler word detectado.
+          <div className="text-center py-12 px-4">
+            {/* Animated illustration */}
+            <div className="relative w-24 h-24 mx-auto mb-6">
+              <div className="absolute inset-0 bg-gradient-to-br from-amber-500/20 to-orange-500/20 rounded-full animate-pulse" />
+              <div className="absolute inset-2 bg-zinc-800 rounded-full flex items-center justify-center">
+                <Zap className="h-10 w-10 text-amber-400" />
+              </div>
+              {/* Floating words animation */}
+              <motion.div
+                className="absolute -top-2 -right-2 px-2 py-1 bg-zinc-700 rounded text-xs text-zinc-400"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: [0, 1, 1, 0], y: [10, 0, 0, -10] }}
+                transition={{ duration: 3, repeat: Infinity, repeatDelay: 1 }}
+              >
+                "uhm..."
+              </motion.div>
+              <motion.div
+                className="absolute -bottom-1 -left-3 px-2 py-1 bg-zinc-700 rounded text-xs text-zinc-400"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: [0, 1, 1, 0], y: [10, 0, 0, -10] }}
+                transition={{ duration: 3, repeat: Infinity, repeatDelay: 1, delay: 1.5 }}
+              >
+                "tipo..."
+              </motion.div>
+            </div>
+
+            <h4 className="text-white font-medium mb-2">Detectar Filler Words</h4>
+            <p className="text-zinc-500 text-sm mb-6 max-w-[200px] mx-auto">
+              Encontre e remova automaticamente "uhms", "ahs", "tipo", "ne" e outros
             </p>
-            <p className="text-zinc-600 text-xs mt-1">
-              Clique em "Detectar" para analisar.
-            </p>
+
+            <Button
+              onClick={detectFillers}
+              disabled={isDetecting}
+              className="bg-amber-500 hover:bg-amber-400 text-black font-medium"
+            >
+              {isDetecting ? (
+                <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Zap className="h-4 w-4 mr-2" />
+              )}
+              Analisar Audio
+            </Button>
+
+            {/* Example stats preview */}
+            <div className="mt-6 pt-6 border-t border-zinc-800">
+              <p className="text-xs text-zinc-600 mb-3">O que voce vai ver:</p>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="bg-zinc-800/30 rounded-lg p-2">
+                  <div className="text-lg font-bold text-zinc-600">--</div>
+                  <div className="text-[10px] text-zinc-600">Detectados</div>
+                </div>
+                <div className="bg-zinc-800/30 rounded-lg p-2">
+                  <div className="text-lg font-bold text-zinc-600">--</div>
+                  <div className="text-[10px] text-zinc-600">Removidos</div>
+                </div>
+                <div className="bg-zinc-800/30 rounded-lg p-2">
+                  <div className="text-lg font-bold text-zinc-600">--s</div>
+                  <div className="text-[10px] text-zinc-600">Economizado</div>
+                </div>
+              </div>
+            </div>
           </div>
         ) : (
           Object.entries(groupedFillers).map(([word, wordFillers]) => (

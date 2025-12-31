@@ -36,6 +36,7 @@ export interface PreviewRange {
 interface AdvancedTimelineProps {
   segments: Segment[];
   audioUrl: string | null;
+  waveformPeaks?: number[]; // Real waveform data from audio analysis
   onToggleSelect: (segmentId: string) => void;
   onSelectRange?: (segmentIds: string[], select: boolean) => void;
   onUpdateSegment?: (segmentId: string, updates: Partial<Segment>) => void;
@@ -49,7 +50,7 @@ interface AdvancedTimelineProps {
 }
 
 export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimelineProps>(
-  function AdvancedTimeline({ segments, audioUrl, onToggleSelect, onSelectRange, onUpdateSegment, onSegmentClick, className, initialMode = "full", previewRange, onPreviewClose, onTimeUpdate, onPlayingChange }, ref) {
+  function AdvancedTimeline({ segments, audioUrl, waveformPeaks, onToggleSelect, onSelectRange, onUpdateSegment, onSegmentClick, className, initialMode = "full", previewRange, onPreviewClose, onTimeUpdate, onPlayingChange }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -790,25 +791,66 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                     onMouseEnter={() => setHoveredSegment(segment.id)}
                     onMouseLeave={() => setHoveredSegment(null)}
                   >
-                    {/* Wave Spectrum Background */}
+                    {/* Wave Spectrum Background - Real or Fake */}
                     <div className="absolute inset-0 flex items-end justify-around px-0.5 pb-1 overflow-hidden opacity-60">
-                      {Array.from({ length: Math.max(3, Math.min(Math.floor(width / 4), 30)) }).map((_, i) => {
-                        // Generate varied heights for wave effect
-                        const baseHeight = 30 + Math.sin(i * 0.8) * 20 + Math.cos(i * 1.2) * 15;
-                        const height = Math.max(15, Math.min(85, baseHeight + (i % 3) * 10));
-                        return (
-                          <div
-                            key={i}
-                            className={cn(
-                              "w-[2px] rounded-t-full",
-                              segment.isSelected
-                                ? "bg-emerald-300/70"
-                                : "bg-white/30"
-                            )}
-                            style={{ height: `${height}%` }}
-                          />
-                        );
-                      })}
+                      {(() => {
+                        const numBars = Math.max(3, Math.min(Math.floor(width / 4), 30));
+
+                        // Try to use real waveform data
+                        if (waveformPeaks && waveformPeaks.length > 0 && totalDuration > 0) {
+                          // Calculate which peaks correspond to this segment
+                          const peaksPerSecond = waveformPeaks.length / totalDuration;
+                          const startPeakIndex = Math.floor(segment.startTime * peaksPerSecond);
+                          const endPeakIndex = Math.ceil(segment.endTime * peaksPerSecond);
+                          const segmentPeaks = waveformPeaks.slice(startPeakIndex, endPeakIndex);
+
+                          if (segmentPeaks.length > 0) {
+                            // Resample to fit numBars
+                            const peaksPerBar = segmentPeaks.length / numBars;
+                            return Array.from({ length: numBars }).map((_, i) => {
+                              const peakStart = Math.floor(i * peaksPerBar);
+                              const peakEnd = Math.ceil((i + 1) * peaksPerBar);
+                              // Get max peak value in this range
+                              const barPeaks = segmentPeaks.slice(peakStart, peakEnd);
+                              const maxPeak = barPeaks.length > 0
+                                ? Math.max(...barPeaks)
+                                : 0.3;
+                              // Scale to 15-95% height
+                              const height = 15 + maxPeak * 80;
+                              return (
+                                <div
+                                  key={i}
+                                  className={cn(
+                                    "w-[2px] rounded-t-full transition-all",
+                                    segment.isSelected
+                                      ? "bg-emerald-300/70"
+                                      : "bg-white/30"
+                                  )}
+                                  style={{ height: `${height}%` }}
+                                />
+                              );
+                            });
+                          }
+                        }
+
+                        // Fallback: Generate fake waveform
+                        return Array.from({ length: numBars }).map((_, i) => {
+                          const baseHeight = 30 + Math.sin(i * 0.8) * 20 + Math.cos(i * 1.2) * 15;
+                          const height = Math.max(15, Math.min(85, baseHeight + (i % 3) * 10));
+                          return (
+                            <div
+                              key={i}
+                              className={cn(
+                                "w-[2px] rounded-t-full",
+                                segment.isSelected
+                                  ? "bg-emerald-300/70"
+                                  : "bg-white/30"
+                              )}
+                              style={{ height: `${height}%` }}
+                            />
+                          );
+                        });
+                      })()}
                     </div>
                     {/* Segment Content - Compact */}
                     <div className="relative px-1.5 py-1 h-full flex items-center overflow-hidden z-10">

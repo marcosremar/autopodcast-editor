@@ -193,16 +193,61 @@ export function ShowNotesPanel({
 
   if (!showNotes) {
     return (
-      <div className={cn("flex flex-col items-center justify-center h-full p-8", className)}>
-        <FileText className="h-12 w-12 text-zinc-600 mb-4" />
+      <div className={cn("flex flex-col items-center justify-center h-full p-8 bg-zinc-900", className)}>
+        {/* Animated illustration */}
+        <div className="relative w-32 h-32 mb-6">
+          {/* Background */}
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 rounded-2xl animate-pulse" />
+
+          {/* Document mockup */}
+          <div className="absolute inset-4 bg-zinc-800 rounded-xl border border-zinc-700 p-3 space-y-2">
+            <div className="h-2 bg-zinc-600 rounded w-3/4" />
+            <div className="h-2 bg-zinc-700 rounded w-full" />
+            <div className="h-2 bg-zinc-700 rounded w-5/6" />
+            <div className="mt-3 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 bg-blue-400 rounded-full" />
+                <div className="h-1.5 bg-zinc-700 rounded flex-1" />
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 bg-blue-400 rounded-full" />
+                <div className="h-1.5 bg-zinc-700 rounded w-4/5" />
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 bg-blue-400 rounded-full" />
+                <div className="h-1.5 bg-zinc-700 rounded w-3/4" />
+              </div>
+            </div>
+          </div>
+
+          {/* Floating badges */}
+          <motion.div
+            className="absolute -top-1 -right-1 px-2 py-1 bg-blue-500 rounded-lg text-[10px] text-white font-medium shadow-lg"
+            initial={{ scale: 0 }}
+            animate={{ scale: [0, 1.1, 1] }}
+            transition={{ duration: 0.4, delay: 0.3 }}
+          >
+            AI
+          </motion.div>
+          <motion.div
+            className="absolute -bottom-2 -left-1 p-1.5 bg-cyan-500 rounded-lg shadow-lg"
+            initial={{ scale: 0 }}
+            animate={{ scale: [0, 1.1, 1] }}
+            transition={{ duration: 0.4, delay: 0.5 }}
+          >
+            <List className="h-3 w-3 text-white" />
+          </motion.div>
+        </div>
+
         <h3 className="text-lg font-medium text-white mb-2">Show Notes</h3>
-        <p className="text-sm text-zinc-500 text-center mb-6">
-          Gere resumo, capitulos e pontos-chave automaticamente com IA.
+        <p className="text-sm text-zinc-500 text-center mb-6 max-w-[240px]">
+          Gere resumo, capitulos e pontos-chave automaticamente com IA
         </p>
+
         <Button
           onClick={() => generateShowNotes()}
           disabled={isGenerating}
-          className="bg-blue-500 hover:bg-blue-400"
+          className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-400 hover:to-cyan-400 text-white font-medium"
         >
           {isGenerating ? (
             <RefreshCw className="h-4 w-4 animate-spin mr-2" />
@@ -211,6 +256,28 @@ export function ShowNotesPanel({
           )}
           Gerar Show Notes
         </Button>
+
+        {/* Features list */}
+        <div className="mt-8 space-y-3 w-full max-w-[200px]">
+          <div className="flex items-center gap-3 text-sm">
+            <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center">
+              <FileText className="h-4 w-4 text-blue-400" />
+            </div>
+            <span className="text-zinc-400">Resumo do episodio</span>
+          </div>
+          <div className="flex items-center gap-3 text-sm">
+            <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center">
+              <Clock className="h-4 w-4 text-cyan-400" />
+            </div>
+            <span className="text-zinc-400">Capitulos com timestamps</span>
+          </div>
+          <div className="flex items-center gap-3 text-sm">
+            <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center">
+              <List className="h-4 w-4 text-emerald-400" />
+            </div>
+            <span className="text-zinc-400">Pontos-chave</span>
+          </div>
+        </div>
       </div>
     );
   }

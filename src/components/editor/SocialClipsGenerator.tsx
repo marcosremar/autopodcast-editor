@@ -423,14 +423,78 @@ export function SocialClipsGenerator({
         )}
 
         {suggestions.length === 0 && savedClips.length === 0 && (
-          <div className="text-center py-8">
-            <Scissors className="h-8 w-8 text-zinc-600 mx-auto mb-3" />
-            <p className="text-zinc-500 text-sm">
-              Nenhum clip gerado ainda.
+          <div className="text-center py-10 px-4">
+            {/* Animated illustration */}
+            <div className="relative w-28 h-28 mx-auto mb-6">
+              {/* Background gradient */}
+              <div className="absolute inset-0 bg-gradient-to-br from-pink-500/20 to-purple-500/20 rounded-2xl animate-pulse" />
+
+              {/* Phone mockup */}
+              <div className="absolute inset-3 bg-zinc-800 rounded-xl border-2 border-zinc-700 flex flex-col overflow-hidden">
+                <div className="h-1.5 bg-zinc-700 mx-2 mt-1.5 rounded-full" />
+                <div className="flex-1 m-1.5 bg-gradient-to-b from-pink-500/30 to-purple-500/30 rounded-lg flex items-center justify-center">
+                  <Play className="h-6 w-6 text-white/60" />
+                </div>
+              </div>
+
+              {/* Floating icons */}
+              <motion.div
+                className="absolute -top-2 -right-2 p-2 bg-pink-500 rounded-lg shadow-lg"
+                initial={{ scale: 0 }}
+                animate={{ scale: [0, 1.2, 1] }}
+                transition={{ duration: 0.5, delay: 0.2 }}
+              >
+                <TrendingUp className="h-4 w-4 text-white" />
+              </motion.div>
+              <motion.div
+                className="absolute -bottom-2 -left-2 p-2 bg-purple-500 rounded-lg shadow-lg"
+                initial={{ scale: 0 }}
+                animate={{ scale: [0, 1.2, 1] }}
+                transition={{ duration: 0.5, delay: 0.4 }}
+              >
+                <Share2 className="h-4 w-4 text-white" />
+              </motion.div>
+            </div>
+
+            <h4 className="text-white font-medium mb-2">Gerar Clips Virais</h4>
+            <p className="text-zinc-500 text-sm mb-6 max-w-[220px] mx-auto">
+              IA identifica os melhores momentos para TikTok, Reels e Shorts
             </p>
-            <p className="text-zinc-600 text-xs mt-1">
-              Clique em "Gerar" para identificar melhores momentos.
-            </p>
+
+            <Button
+              onClick={generateSuggestions}
+              disabled={isGenerating}
+              className="bg-gradient-to-r from-pink-500 to-purple-500 hover:from-pink-400 hover:to-purple-400 text-white font-medium"
+            >
+              {isGenerating ? (
+                <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Sparkles className="h-4 w-4 mr-2" />
+              )}
+              Encontrar Momentos
+            </Button>
+
+            {/* Features preview */}
+            <div className="mt-8 grid grid-cols-3 gap-3 text-center">
+              <div className="space-y-2">
+                <div className="w-10 h-10 mx-auto bg-zinc-800 rounded-lg flex items-center justify-center">
+                  <Smartphone className="h-5 w-5 text-pink-400" />
+                </div>
+                <p className="text-[10px] text-zinc-500">9:16 Vertical</p>
+              </div>
+              <div className="space-y-2">
+                <div className="w-10 h-10 mx-auto bg-zinc-800 rounded-lg flex items-center justify-center">
+                  <Type className="h-5 w-5 text-purple-400" />
+                </div>
+                <p className="text-[10px] text-zinc-500">Legendas Auto</p>
+              </div>
+              <div className="space-y-2">
+                <div className="w-10 h-10 mx-auto bg-zinc-800 rounded-lg flex items-center justify-center">
+                  <TrendingUp className="h-5 w-5 text-emerald-400" />
+                </div>
+                <p className="text-[10px] text-zinc-500">Score Viral</p>
+              </div>
+            </div>
           </div>
         )}
       </div>
