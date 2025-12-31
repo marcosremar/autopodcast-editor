@@ -1,12 +1,19 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const protectedRoutes = ["/dashboard", "/editor"];
-const publicRoutes = ["/", "/api/waitlist"];
-const authRoutes = ["/api/auth/login", "/api/auth/logout", "/api/auth/me"];
+const protectedRoutes = ["/editor"]; // Removed /dashboard for development
+const publicRoutes = ["/", "/dashboard", "/api/waitlist"]; // Added /dashboard as public route
+const authRoutes = ["/api/auth/login", "/api/auth/logout", "/api/auth/me", "/api/auth/demo"];
 
 export async function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  const { pathname, searchParams } = request.nextUrl;
+
+  // Check for demo mode - redirect to demo login which will set cookie and redirect back
+  if (searchParams.get("demo") === "true") {
+    const redirectUrl = new URL("/api/auth/demo", request.url);
+    redirectUrl.searchParams.set("redirect", pathname);
+    return NextResponse.redirect(redirectUrl);
+  }
 
   // Allow all auth routes
   if (authRoutes.some((route) => pathname.startsWith(route))) {

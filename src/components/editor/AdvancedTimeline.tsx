@@ -25,12 +25,14 @@ import {
   Star,
   Minus,
   Eye,
+  Repeat,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface AdvancedTimelineRef {
   playSegment: (segment: Segment) => void;
   seekToTime: (time: number) => void;
+  seekTo: (time: number) => void; // Alias for seekToTime
   getCurrentTime: () => number;
 }
 
@@ -51,6 +53,7 @@ interface AdvancedTimelineProps {
   initialMode?: TimelineMode;
   previewRange?: PreviewRange;
   onPreviewClose?: () => void;
+  onTimeUpdate?: (time: number) => void;
 }
 
 // Segment detail modal
@@ -392,7 +395,7 @@ function RangeConfirmModal({ segments, isOpen, onClose, onConfirm, formatTime }:
 }
 
 export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimelineProps>(
-  function AdvancedTimeline({ segments, audioUrl, onToggleSelect, onSelectRange, onUpdateSegment, className, initialMode = "full", previewRange, onPreviewClose }, ref) {
+  function AdvancedTimeline({ segments, audioUrl, onToggleSelect, onSelectRange, onUpdateSegment, className, initialMode = "full", previewRange, onPreviewClose, onTimeUpdate }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -404,6 +407,7 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
     const [selectedSegmentDetail, setSelectedSegmentDetail] = useState<Segment | null>(null);
     const [hoveredSegment, setHoveredSegment] = useState<string | null>(null);
     const [mode, setMode] = useState<TimelineMode>(initialMode);
+    const [previewLoop, setPreviewLoop] = useState(false); // Loop mode for preview
 
     // Range selection state
     const [rangeStartSegment, setRangeStartSegment] = useState<string | null>(null);
@@ -426,16 +430,61 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
     // Auto-switch to preview mode when previewRange is provided
     useEffect(() => {
       if (previewRange && previewRange.segmentIds.length > 0) {
+        console.log("[Timeline] Switching to preview mode with segments:", previewRange.segmentIds);
         setMode("preview");
+
+        // Scroll to first focused segment
+        const firstFocusedSegmentId = previewRange.segmentIds[0];
+        const firstSegment = segments.find(s => s.id === firstFocusedSegmentId);
+
+        if (firstSegment && timelineRef.current) {
+          console.log("[Timeline] Scrolling to segment:", firstSegment.id, "at time:", firstSegment.startTime);
+
+          // Small delay to ensure preview mode is rendered
+          setTimeout(() => {
+            const segmentElement = timelineRef.current?.querySelector(`[data-segment-id="${firstSegment.id}"]`);
+            if (segmentElement) {
+              console.log("[Timeline] Found segment element, scrolling...");
+              segmentElement.scrollIntoView({
+                behavior: "smooth",
+                block: "center",
+                inline: "center"
+              });
+
+              // Also scroll the timeline container if it exists
+              const scrollContainer = timelineRef.current?.querySelector('.overflow-x-auto');
+              if (scrollContainer) {
+                const segmentRect = segmentElement.getBoundingClientRect();
+                const containerRect = scrollContainer.getBoundingClientRect();
+                const scrollLeft = segmentRect.left - containerRect.left + scrollContainer.scrollLeft - (containerRect.width / 2);
+
+                scrollContainer.scrollTo({
+                  left: scrollLeft,
+                  behavior: 'smooth'
+                });
+              }
+            } else {
+              console.log("[Timeline] Segment element not found!");
+            }
+          }, 100);
+        } else {
+          console.log("[Timeline] First segment not found or timelineRef is null");
+        }
+      } else if (!previewRange) {
+        console.log("[Timeline] Preview range cleared, returning to full mode");
       }
-    }, [previewRange]);
+    }, [previewRange, segments]);
 
     // Get segments based on mode
     const displaySegments = mode === "edited"
       ? segments.filter(s => s.isSelected).sort((a, b) => a.startTime - b.startTime)
-      : mode === "preview" && previewRange
-      ? segments.filter(s => previewRange.segmentIds.includes(s.id)).sort((a, b) => a.startTime - b.startTime)
-      : segments;
+      : segments; // In preview mode, show ALL segments (will be dimmed if not in preview)
+
+    // Helper to check if segment is in preview focus
+    const isInPreviewFocus = (segmentId: string): boolean => {
+      if (mode !== "preview" || !previewRange) return true;
+      return previewRange.segmentIds.includes(segmentId);
+    };
 
     const selectedSegments = segments.filter(s => s.isSelected).sort((a, b) => a.startTime - b.startTime);
 
@@ -484,6 +533,11 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
         if (!audio) return;
         audio.currentTime = time;
       },
+      seekTo: (time: number) => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        audio.currentTime = time;
+      },
       getCurrentTime: () => currentTime,
     }));
 
@@ -492,11 +546,53 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
       const audio = audioRef.current;
       if (!audio) return;
 
-      const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
+      const handleTimeUpdate = () => {
+        const currentTime = audio.currentTime;
+        setCurrentTime(currentTime);
+        onTimeUpdate?.(currentTime);
+
+        // Preview mode playback restrictions
+        if (mode === "preview" && previewRange && previewRange.segmentIds.length > 0) {
+          const previewSegments = segments.filter(s => previewRange.segmentIds.includes(s.id));
+          if (previewSegments.length > 0) {
+            // Calculate time range for preview segments
+            const minTime = Math.min(...previewSegments.map(s => s.startTime));
+            const maxTime = Math.max(...previewSegments.map(s => s.endTime));
+
+            // If playback goes beyond preview range
+            if (currentTime < minTime || currentTime > maxTime) {
+              if (previewLoop) {
+                // Loop back to start
+                audio.currentTime = minTime;
+                console.log("[Timeline] Preview loop - jumping to start:", minTime);
+              } else {
+                // Stop playback
+                audio.pause();
+                audio.currentTime = minTime;
+                console.log("[Timeline] Preview ended - stopping at:", minTime);
+              }
+            }
+          }
+        }
+      };
+
       const handleLoadedMetadata = () => setDuration(audio.duration);
       const handlePlay = () => setIsPlaying(true);
       const handlePause = () => setIsPlaying(false);
-      const handleEnded = () => setIsPlaying(false);
+
+      const handleEnded = () => {
+        setIsPlaying(false);
+        // If preview mode with loop enabled, restart
+        if (mode === "preview" && previewLoop && previewRange && previewRange.segmentIds.length > 0) {
+          const previewSegments = segments.filter(s => previewRange.segmentIds.includes(s.id));
+          if (previewSegments.length > 0) {
+            const minTime = Math.min(...previewSegments.map(s => s.startTime));
+            audio.currentTime = minTime;
+            audio.play();
+            console.log("[Timeline] Preview loop on ended - restarting from:", minTime);
+          }
+        }
+      };
 
       audio.addEventListener("timeupdate", handleTimeUpdate);
       audio.addEventListener("loadedmetadata", handleLoadedMetadata);
@@ -511,7 +607,7 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
         audio.removeEventListener("pause", handlePause);
         audio.removeEventListener("ended", handleEnded);
       };
-    }, []);
+    }, [mode, previewRange, previewLoop, segments]);
 
     // Auto-scroll to keep playhead visible
     useEffect(() => {
@@ -804,7 +900,9 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
 
     // Calculate segment position for edited mode
     const getSegmentPosition = (segment: Segment, index: number) => {
-      if (mode === "full") {
+      // In preview mode, use full timeline positioning (time-based)
+      // so all segments appear in their correct positions
+      if (mode === "full" || mode === "preview") {
         return {
           left: segment.startTime * pixelsPerSecond,
           width: (segment.endTime - segment.startTime) * pixelsPerSecond,
@@ -825,11 +923,12 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
 
     // Calculate playhead position based on mode
     const getPlayheadPosition = (): number | null => {
-      if (mode === "full") {
+      // In full or preview mode, use time-based positioning
+      if (mode === "full" || mode === "preview") {
         return currentTime * pixelsPerSecond;
       }
 
-      // For edited/preview modes, find which segment contains the current time
+      // For edited mode, find which segment contains the current time
       // and calculate position within the sequential layout
       let accumulatedPosition = 0;
 
@@ -959,10 +1058,26 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
               <span className="text-[10px] text-violet-300 font-medium">
                 {previewRange.label || `${previewRange.segmentIds.length} segmentos`}
               </span>
+
+              {/* Loop Toggle Button */}
+              <button
+                onClick={() => setPreviewLoop(!previewLoop)}
+                className={cn(
+                  "p-0.5 rounded transition-all",
+                  previewLoop
+                    ? "bg-violet-500 text-white shadow-lg shadow-violet-500/50"
+                    : "hover:bg-violet-500/30 text-violet-400 hover:text-white"
+                )}
+                title={previewLoop ? "Loop ativado - clique para desativar" : "Loop desativado - clique para repetir"}
+              >
+                <Repeat className={cn("h-3 w-3", previewLoop && "animate-pulse")} />
+              </button>
+
               {onPreviewClose && (
                 <button
                   onClick={() => {
                     setMode("full");
+                    setPreviewLoop(false); // Reset loop when closing preview
                     onPreviewClose();
                   }}
                   className="p-0.5 rounded hover:bg-violet-500/30 text-violet-400 hover:text-white transition-colors"
@@ -1045,17 +1160,22 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                 const analysis = segment.analysis as SegmentAnalysis | null;
                 const isHovered = hoveredSegment === segment.id;
                 const inSelectionRange = isInSelectionRange(segment.id);
+                const inFocus = isInPreviewFocus(segment.id);
 
                 return (
                   <motion.div
                     key={segment.id}
+                    data-segment-id={segment.id}
                     className={cn(
-                      "absolute rounded cursor-pointer border select-none shadow-sm",
+                      "absolute rounded cursor-pointer border select-none shadow-sm transition-all duration-300",
                       inSelectionRange
                         ? "bg-blue-400 border-blue-300 opacity-100 ring-2 ring-blue-300/50"
                         : getSegmentColor(segment),
                       !inSelectionRange && getSegmentBorderColor(segment),
                       !inSelectionRange && (segment.isSelected ? "opacity-100" : "opacity-70"),
+                      // Preview focus styling - dim segments not in focus
+                      !inFocus && "opacity-30 grayscale",
+                      inFocus && mode === "preview" && "ring-2 ring-violet-500/50 shadow-lg shadow-violet-500/20",
                       isHovered && !isRangeSelecting && "ring-1 ring-white/30 shadow-md shadow-black/30 z-20"
                     )}
                     style={{

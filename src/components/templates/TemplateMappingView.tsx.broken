@@ -1,0 +1,776 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Segment, TemplateSection } from "@/lib/db/schema";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Play,
+  Pause,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  Wand2,
+  GripVertical,
+  ArrowRight,
+  Trash2,
+  Mic,
+  RefreshCw,
+  Loader2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+
+// Types for mapping data
+interface SegmentMapping {
+  segmentId: string;
+  sectionId: string;
+  templateSectionId: string;
+  confidence: number;
+  reasoning: string;
+}
+
+interface ValidationIssue {
+  type: string;
+  sectionId: string;
+  sectionName: string;
+  message: string;
+  severity: "error" | "warning";
+  suggestion?: string;
+}
+
+interface ProjectSectionWithTemplate {
+  id: string;
+  name: string;
+  order: number;
+  status: string;
+  templateSection: {
+    id: string;
+    name: string;
+    description: string | null;
+    isRequired: boolean | null;
+    type: string;
+    minDuration: number | null;
+    maxDuration: number | null;
+    suggestedDuration: number | null;
+    exampleText: string | null;
+    icon: string | null;
+    color: string | null;
+  } | null;
+}
+
+interface MappingData {
+  mappings: SegmentMapping[];
+  unmappedSegments: string[];
+  issues: ValidationIssue[];
+  overallConfidence: number;
+}
+
+// Section with embedded segments for external data mode
+interface SectionWithSegments {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  minDuration: number;
+  maxDuration: number | null;
+  suggestedDuration: number;
+  isRequired: boolean;
+  order: number;
+  segments: {
+    id: string;
+    title: string;
+    summary: string;
+    duration: number;
+    confidence: number;
+  }[];
+  totalDuration: number;
+  status: "empty" | "partial" | "complete";
+}
+
+interface UnmappedSegment {
+  id: string;
+  title: string;
+  summary: string;
+  duration: number;
+  topics?: string[];
+}
+
+interface TemplateMappingViewProps {
+  projectId: string;
+  // Legacy props (when component fetches its own data)
+  templateId?: string;
+  segments?: Segment[];
+  sections?: ProjectSectionWithTemplate[] | SectionWithSegments[];
+  onPlay?: (segment: Segment) => void;
+  onRecordSection?: (sectionId: string) => void;
+  onMappingChange?: (mappingData: MappingData) => void;
+  // New props (when parent provides data)
+  unmappedSegments?: UnmappedSegment[];
+  onAssignSegment?: (segmentId: string, sectionId: string) => void;
+  onRemoveSegment?: (segmentId: string, sectionId: string) => void;
+  onAutoMap?: () => void;
+  isAutoMapping?: boolean;
+}
+
+export function TemplateMappingView({
+  projectId,
+  templateId,
+  segments = [],
+  sections = [],
+  onPlay,
+  onRecordSection,
+  onMappingChange,
+  unmappedSegments: externalUnmappedSegments,
+  onAssignSegment,
+  onRemoveSegment,
+  onAutoMap: externalAutoMap,
+  isAutoMapping: externalIsAutoMapping,
+}: TemplateMappingViewProps) {
+  // Determine if we're in "external data mode" (parent provides data)
+  const isExternalMode = !!externalUnmappedSegments;
+  const [mappingData, setMappingData] = useState<MappingData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isAutoMapping, setIsAutoMapping] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const [playingSegment, setPlayingSegment] = useState<string | null>(null);
+  const [draggedSegment, setDraggedSegment] = useState<string | null>(null);
+
+  // Load current mapping on mount
+  useEffect(() => {
+    loadCurrentMapping();
+  }, [projectId]);
+
+  const loadCurrentMapping = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`/api/projects/${projectId}/auto-map`);
+      const data = await response.json();
+
+      if (data.success) {
+        const newMappingData: MappingData = {
+          mappings: data.mappings || [],
+          unmappedSegments: data.unmappedSegments || [],
+          issues: data.issues || [],
+          overallConfidence: data.overallConfidence || 0,
+        };
+        setMappingData(newMappingData);
+        onMappingChange?.(newMappingData);
+      }
+    } catch (error) {
+      console.error("Error loading mapping:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAutoMap = async () => {
+    setIsAutoMapping(true);
+    try {
+      const response = await fetch(`/api/projects/${projectId}/auto-map`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ templateId, save: true }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        const newMappingData: MappingData = {
+          mappings: data.mappings || [],
+          unmappedSegments: data.unmappedSegments || [],
+          issues: data.issues || [],
+          overallConfidence: data.overallConfidence || 0,
+        };
+        setMappingData(newMappingData);
+        onMappingChange?.(newMappingData);
+        toast.success(data.message || "Mapeamento realizado com sucesso!");
+      } else {
+        toast.error(data.error || "Erro ao mapear segmentos");
+      }
+    } catch (error) {
+      console.error("Error auto-mapping:", error);
+      toast.error("Erro ao mapear segmentos automaticamente");
+    } finally {
+      setIsAutoMapping(false);
+    }
+  };
+
+  const handleDragStart = (e: React.DragEvent, segmentId: string) => {
+    setDraggedSegment(segmentId);
+    e.dataTransfer.setData("segmentId", segmentId);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedSegment(null);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = async (e: React.DragEvent, sectionId: string) => {
+    e.preventDefault();
+    const segmentId = e.dataTransfer.getData("segmentId");
+
+    if (!segmentId) return;
+
+    try {
+      const response = await fetch(`/api/projects/${projectId}/auto-map`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "assign",
+          segmentId,
+          sectionId,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        await loadCurrentMapping();
+        toast.success("Segmento atribuido com sucesso!");
+      } else {
+        toast.error(data.error || "Erro ao atribuir segmento");
+      }
+    } catch (error) {
+      console.error("Error assigning segment:", error);
+      toast.error("Erro ao atribuir segmento");
+    }
+
+    setDraggedSegment(null);
+  };
+
+  const handleRemoveSegment = async (segmentId: string, sectionId: string) => {
+    try {
+      const response = await fetch(`/api/projects/${projectId}/auto-map`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "remove",
+          segmentId,
+          sectionId,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        await loadCurrentMapping();
+        toast.success("Segmento removido com sucesso!");
+      } else {
+        toast.error(data.error || "Erro ao remover segmento");
+      }
+    } catch (error) {
+      console.error("Error removing segment:", error);
+      toast.error("Erro ao remover segmento");
+    }
+  };
+
+  const toggleSectionExpand = (sectionId: string) => {
+    const newExpanded = new Set(expandedSections);
+    if (newExpanded.has(sectionId)) {
+      newExpanded.delete(sectionId);
+    } else {
+      newExpanded.add(sectionId);
+    }
+    setExpandedSections(newExpanded);
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const formatDuration = (minSec: number | null, maxSec: number | null) => {
+    if (!minSec && !maxSec) return "";
+    if (minSec && maxSec) {
+      return `${formatTime(minSec)} - ${formatTime(maxSec)}`;
+    }
+    if (minSec) return `min ${formatTime(minSec)}`;
+    if (maxSec) return `max ${formatTime(maxSec)}`;
+    return "";
+  };
+
+  // Get segments mapped to a section
+  const getSegmentsForSection = (sectionId: string): Segment[] => {
+    if (!mappingData) return [];
+    const mappedIds = mappingData.mappings
+      .filter((m) => m.sectionId === sectionId)
+      .map((m) => m.segmentId);
+    return segments.filter((s) => mappedIds.includes(s.id));
+  };
+
+  // Get unmapped segments - supports both external and internal data modes
+  const getUnmappedSegments = (): (Segment | UnmappedSegment)[] => {
+    // If in external mode, use the externally provided unmapped segments
+    if (isExternalMode && externalUnmappedSegments) {
+      return externalUnmappedSegments;
+    }
+    // Otherwise use internal calculation
+    if (!mappingData) return segments;
+    const mappedIds = new Set(mappingData.mappings.map((m) => m.segmentId));
+    return segments.filter((s) => !mappedIds.has(s.id));
+  };
+
+  // Get section status based on mapping
+  const getSectionStatus = (
+    sectionId: string,
+    isRequired: boolean | null
+  ): { status: "complete" | "partial" | "empty"; color: string; icon: any } => {
+    const sectionSegments = getSegmentsForSection(sectionId);
+    const issue = mappingData?.issues.find((i) => i.sectionId === sectionId);
+
+    if (sectionSegments.length === 0) {
+      return {
+        status: "empty",
+        color: isRequired ? "text-red-500" : "text-gray-400",
+        icon: isRequired ? XCircle : AlertTriangle,
+      };
+    }
+
+    if (issue && issue.severity === "error") {
+      return {
+        status: "partial",
+        color: "text-yellow-500",
+        icon: AlertTriangle,
+      };
+    }
+
+    return {
+      status: "complete",
+      color: "text-green-500",
+      icon: CheckCircle2,
+    };
+  };
+
+  // Calculate total mapped duration for a section
+  const getSectionDuration = (sectionId: string): number => {
+    const sectionSegments = getSegmentsForSection(sectionId);
+    return sectionSegments.reduce((sum, s) => sum + (s.endTime - s.startTime), 0);
+  };
+
+  const unmappedSegments = getUnmappedSegments();
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center p-12">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+        <span className="ml-3 text-gray-600">Carregando mapeamento...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header with auto-map button */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">Mapeamento de Template</h2>
+          {mappingData && (
+            <p className="text-sm text-gray-500">
+              Confianca geral: {Math.round(mappingData.overallConfidence * 100)}%
+              {" | "}
+              {mappingData.mappings.length} mapeados
+              {" | "}
+              {unmappedSegments.length} nao mapeados
+            </p>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={loadCurrentMapping}
+            disabled={isLoading}
+          >
+            <RefreshCw className={cn("h-4 w-4 mr-2", isLoading && "animate-spin")} />
+            Atualizar
+          </Button>
+          <Button
+            onClick={handleAutoMap}
+            disabled={isAutoMapping}
+            className="bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600"
+          >
+            {isAutoMapping ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Wand2 className="h-4 w-4 mr-2" />
+            )}
+            Auto-Mapear com IA
+          </Button>
+        </div>
+      </div>
+
+      {/* Issues alerts */}
+      {mappingData && mappingData.issues.length > 0 && (
+        <div className="space-y-2">
+          {mappingData.issues.map((issue, idx) => (
+            <div
+              key={idx}
+              className={cn(
+                "p-3 rounded-lg border flex items-start gap-3",
+                issue.severity === "error"
+                  ? "bg-red-50 border-red-200"
+                  : "bg-yellow-50 border-yellow-200"
+              )}
+            >
+              {issue.severity === "error" ? (
+                <XCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+              ) : (
+                <AlertTriangle className="h-5 w-5 text-yellow-500 shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <p
+                  className={cn(
+                    "text-sm font-medium",
+                    issue.severity === "error" ? "text-red-800" : "text-yellow-800"
+                  )}
+                >
+                  {issue.message}
+                </p>
+                {issue.suggestion && (
+                  <p
+                    className={cn(
+                      "text-xs mt-1",
+                      issue.severity === "error" ? "text-red-600" : "text-yellow-600"
+                    )}
+                  >
+                    Sugestao: {issue.suggestion}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Template Sections (left column) */}
+        <div className="space-y-4">
+          <h3 className="font-medium text-gray-700 flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-blue-500" />
+            Slots do Template
+          </h3>
+
+          {sections.map((section) => {
+            // Handle both old format (with templateSection) and new format (flat structure)
+            const isExternalSection = 'segments' in section;
+            const templateSection = isExternalSection
+              ? {
+                  id: section.id,
+                  name: (section as SectionWithSegments).name,
+                  description: (section as SectionWithSegments).description,
+                  isRequired: (section as SectionWithSegments).isRequired,
+                  type: (section as SectionWithSegments).type,
+                  minDuration: (section as SectionWithSegments).minDuration,
+                  maxDuration: (section as SectionWithSegments).maxDuration,
+                  suggestedDuration: (section as SectionWithSegments).suggestedDuration,
+                  exampleText: null,
+                  icon: null,
+                  color: null,
+                }
+              : (section as ProjectSectionWithTemplate).templateSection;
+            if (!templateSection) return null;
+
+            // In external mode, use data directly from section
+            const sectionStatus = isExternalSection
+              ? {
+                  status: (section as SectionWithSegments).status,
+                  color: (section as SectionWithSegments).status === "complete" ? "text-green-500"
+                    : (section as SectionWithSegments).status === "partial" ? "text-yellow-500"
+                    : templateSection.isRequired ? "text-red-500" : "text-gray-400",
+                  icon: (section as SectionWithSegments).status === "complete" ? CheckCircle2
+                    : (section as SectionWithSegments).status === "partial" ? AlertTriangle
+                    : templateSection.isRequired ? XCircle : AlertTriangle,
+                }
+              : getSectionStatus(section.id, templateSection.isRequired);
+
+            const sectionSegments = isExternalSection
+              ? (section as SectionWithSegments).segments
+              : getSegmentsForSection(section.id);
+            const sectionDuration = isExternalSection
+              ? (section as SectionWithSegments).totalDuration
+              : getSectionDuration(section.id);
+            const isExpanded = expandedSections.has(section.id);
+            const StatusIcon = sectionStatus.icon;
+
+            return (
+              <Card
+                key={section.id}
+                className={cn(
+                  "transition-all border-2",
+                  draggedSegment && "border-dashed border-blue-300 bg-blue-50/50",
+                  sectionStatus.status === "complete" && "border-green-200",
+                  sectionStatus.status === "partial" && "border-yellow-200",
+                  sectionStatus.status === "empty" &&
+                    templateSection.isRequired &&
+                    "border-red-200"
+                )}
+                onDragOver={handleDragOver}
+                onDrop={(e) => handleDrop(e, section.id)}
+              >
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <StatusIcon className={cn("h-5 w-5", sectionStatus.color)} />
+                      <div>
+                        <CardTitle className="text-base">
+                          {section.order}. {templateSection.name}
+                        </CardTitle>
+                        <div className="flex items-center gap-2 mt-1">
+                          {templateSection.isRequired && (
+                            <Badge variant="destructive" className="text-xs">
+                              Obrigatorio
+                            </Badge>
+                          )}
+                          <Badge variant="outline" className="text-xs">
+                            {formatDuration(
+                              templateSection.minDuration,
+                              templateSection.maxDuration
+                            )}
+                          </Badge>
+                          {sectionSegments.length > 0 && (
+                            <Badge variant="secondary" className="text-xs">
+                              {sectionSegments.length} seg | {formatTime(sectionDuration)}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {sectionSegments.length === 0 && onRecordSection && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onRecordSection(section.id)}
+                          className="text-orange-600 border-orange-300 hover:bg-orange-50"
+                        >
+                          <Mic className="h-4 w-4 mr-1" />
+                          Gravar
+                        </Button>
+                      )}
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={() => toggleSectionExpand(section.id)}
+                      >
+                        {isExpanded ? (
+                          <ChevronUp className="h-4 w-4" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <AnimatePresence>
+                  {isExpanded && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                    >
+                      <CardContent className="pt-2 space-y-3">
+                        {templateSection.description && (
+                          <p className="text-sm text-gray-600">
+                            {templateSection.description}
+                          </p>
+                        )}
+
+                        {templateSection.exampleText && (
+                          <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-600 italic">
+                            &ldquo;{templateSection.exampleText}&rdquo;
+                          </div>
+                        )}
+
+                        {/* Mapped segments */}
+                        {sectionSegments.length > 0 ? (
+                          <div className="space-y-2">
+                            <h4 className="text-xs font-medium text-gray-500 uppercase">
+                              Segmentos Mapeados
+                            </h4>
+                            {sectionSegments.map((segment: any) => {
+                              // Handle both internal (Segment) and external formats
+                              const isExtSegment = 'title' in segment;
+                              const displayText = isExtSegment
+                                ? (segment.title || segment.summary || 'Segmento')
+                                : (segment.text?.slice(0, 80) + '...');
+                              const segDuration = isExtSegment
+                                ? segment.duration
+                                : (segment.endTime - segment.startTime);
+
+                              return (
+                                <div
+                                  key={segment.id}
+                                  className="flex items-center gap-2 p-2 bg-white rounded border"
+                                >
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm text-gray-700 truncate">
+                                      {displayText}
+                                    </p>
+                                    <div className="flex items-center gap-2 mt-1">
+                                      <Badge variant="outline" className="text-xs">
+                                        {formatTime(segDuration)}
+                                      </Badge>
+                                      {!isExtSegment && segment.startTime !== undefined && (
+                                        <Badge variant="outline" className="text-xs">
+                                          {formatTime(segment.startTime)} - {formatTime(segment.endTime)}
+                                        </Badge>
+                                      )}
+                                      {segment.confidence && (
+                                        <Badge variant="secondary" className="text-xs">
+                                          {Math.round(segment.confidence * 100)}% conf
+                                        </Badge>
+                                      )}
+                                      {!isExtSegment && segment.topic && (
+                                        <Badge variant="secondary" className="text-xs">
+                                          {segment.topic}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {!isExtSegment && onPlay && (
+                                      <Button
+                                        size="icon-sm"
+                                        variant="ghost"
+                                        onClick={() => onPlay(segment)}
+                                      >
+                                        <Play className="h-4 w-4" />
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size="icon-sm"
+                                      variant="ghost"
+                                      className="text-red-500 hover:text-red-700"
+                                      onClick={() => {
+                                        if (isExternalSection && onRemoveSegment) {
+                                          onRemoveSegment(segment.id, section.id);
+                                        } else {
+                                          handleRemoveSegment(segment.id, section.id);
+                                        }
+                                      }}
+                                    >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-center py-4 text-gray-400 border-2 border-dashed rounded-lg">
+                            <p className="text-sm">Arraste segmentos aqui</p>
+                          </div>
+                        )}
+                      </CardContent>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </Card>
+            );
+          })}
+        </div>
+
+        {/* Unmapped Segments (right column) */}
+        <div className="space-y-4">
+          <h3 className="font-medium text-gray-700 flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-gray-400" />
+            Segmentos Disponiveis ({unmappedSegments.length})
+          </h3>
+
+          {unmappedSegments.length === 0 ? (
+            <div className="text-center py-8 text-gray-400 border-2 border-dashed rounded-lg">
+              <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-green-500" />
+              <p className="text-sm">Todos os segmentos foram mapeados!</p>
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[600px] overflow-y-auto pr-2">
+              {unmappedSegments.map((segment) => {
+                // Handle both Segment and UnmappedSegment types
+                const isExternalSegment = 'title' in segment;
+                const displayText = isExternalSegment
+                  ? (segment as UnmappedSegment).title || (segment as UnmappedSegment).summary
+                  : (segment as Segment).text;
+                const duration = isExternalSegment
+                  ? (segment as UnmappedSegment).duration
+                  : ((segment as Segment).endTime - (segment as Segment).startTime);
+                const topics = isExternalSegment
+                  ? (segment as UnmappedSegment).topics
+                  : [(segment as Segment).topic].filter(Boolean);
+
+                return (
+                  <div
+                    key={segment.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, segment.id)}
+                    onDragEnd={handleDragEnd}
+                    className={cn(
+                      "p-3 bg-white rounded-lg border cursor-grab active:cursor-grabbing transition-all hover:shadow-md",
+                      draggedSegment === segment.id && "opacity-50 border-blue-500"
+                    )}
+                  >
+                    <div className="flex items-start gap-2">
+                      <GripVertical className="h-5 w-5 text-gray-400 shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-700 line-clamp-2">
+                          {displayText}
+                        </p>
+                        <div className="flex items-center gap-2 mt-2">
+                          <Badge variant="outline" className="text-xs">
+                            {formatTime(duration)}
+                          </Badge>
+                          {!isExternalSegment && (segment as Segment).startTime !== undefined && (
+                            <Badge variant="outline" className="text-xs">
+                              {formatTime((segment as Segment).startTime)} - {formatTime((segment as Segment).endTime)}
+                            </Badge>
+                          )}
+                          {topics && topics.length > 0 && topics.map((topic, idx) => (
+                            <Badge key={idx} variant="secondary" className="text-xs">
+                              {topic}
+                            </Badge>
+                          ))}
+                          {!isExternalSegment && (segment as Segment).interestScore && (
+                            <Badge
+                              variant={
+                                ((segment as Segment).interestScore || 0) >= 7 ? "default" : "secondary"
+                              }
+                              className="text-xs"
+                            >
+                              {(segment as Segment).interestScore}/10
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!isExternalSegment && onPlay && (
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            onClick={() => onPlay(segment as Segment)}
+                          >
+                            <Play className="h-4 w-4" />
+                          </Button>
+                        )}
+                        <ArrowRight className="h-4 w-4 text-gray-400" />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

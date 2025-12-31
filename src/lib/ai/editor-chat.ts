@@ -1,13 +1,10 @@
 /**
  * Servico de Chat para Edicao de Podcast
- *
- * Usa Anthropic Claude para processar comandos de edicao em linguagem natural
+ * Usa AIService centralizado (Groq) para processar comandos de edicao em linguagem natural
  */
 
+import { getAIService, type AIMessage } from "@/lib/ai/AIService";
 import { getSemanticSearchService, SegmentWithEmbedding } from "./semantic-search";
-
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const CHAT_MODEL = "claude-sonnet-4-20250514";
 
 export interface Segment {
   id: string;
@@ -34,13 +31,10 @@ export interface ChatMessage {
 }
 
 export class EditorChatService {
-  private apiKey: string;
-  private model: string;
   private searchService = getSemanticSearchService();
 
-  constructor(options?: { apiKey?: string; model?: string }) {
-    this.apiKey = options?.apiKey || ANTHROPIC_API_KEY || "";
-    this.model = options?.model || CHAT_MODEL;
+  constructor() {
+    // AIService é inicializado automaticamente via singleton
   }
 
   /**
@@ -134,69 +128,58 @@ ${searchResults.map((r, i) => `[${i}] ID:${r.id} | Score:${r.score.toFixed(2)} |
 === INSTRUCOES ===
 Responda em portugues de forma natural e amigavel.
 
-IMPORTANTE: Quando o usuario perguntar sobre partes do podcast (ex: "qual parte fala de IA?", "onde menciona X?"), voce DEVE:
-1. Analisar os segmentos acima e os resultados da busca semantica
-2. Identificar os segmentos relevantes
-3. Retornar uma acao "focus" com os IDs dos segmentos para que sejam destacados na timeline
+⚠️  REGRA CRITICA - SEMPRE RETORNE JSON QUANDO HOUVER ACOES! ⚠️
 
-Quando o usuario perguntar "como posso melhorar?" ou pedir sugestoes:
-1. Analise as estatisticas acima
-2. Identifique oportunidades de melhoria (ex: segmentos de baixo interesse selecionados, segmentos de alto interesse nao selecionados)
-3. Sugira acoes concretas com os IDs dos segmentos
+Quando o usuario perguntar sobre partes do podcast, voce DEVE obrigatoriamente:
+1. Analisar os segmentos e resultados da busca semantica
+2. Identificar os IDs dos segmentos relevantes
+3. Retornar um bloco JSON com acao "focus"
 
-Quando sugerir acoes, retorne um JSON no formato:
+EXEMPLOS DE QUANDO RETORNAR JSON:
+- "me mostra a introducao" → focus nos segmentos da introducao
+- "qual parte fala de IA?" → focus nos segmentos que mencionam IA
+- "onde menciona X?" → focus nos segmentos sobre X
+
+FORMATO OBRIGATORIO:
+Primeiro escreva uma resposta amigavel explicando o que encontrou.
+Depois, SEMPRE inclua o bloco JSON ao final:
+
 \`\`\`json
 {
   "actions": [
-    {"type": "select|deselect|focus|info", "segmentIds": ["id1", "id2"], "message": "descricao da acao"}
+    {"type": "focus", "segmentIds": ["id-real-1", "id-real-2"], "message": "Destacando os segmentos sobre [topico]"}
   ]
 }
 \`\`\`
 
-Tipos de acao:
-- select: selecionar segmentos para incluir na edicao
-- deselect: remover segmentos da edicao
-- focus: destacar segmentos para o usuario ver/ouvir (USE ISSO quando o usuario perguntar sobre partes especificas!)
-- info: apenas informar algo, sem acao de edicao
+IMPORTANTE:
+- Use IDs REAIS dos segmentos listados acima (ex: "550e8400-e29b-41d4-a716-446655440000")
+- NUNCA invente IDs
+- Type "focus" = destacar na timeline (use para buscas/perguntas)
+- Type "select" = adicionar a edicao final
+- Type "deselect" = remover da edicao final
+- Type "info" = apenas informar, sem acao
 
-Se nao houver acoes de edicao, apenas responda normalmente sem o bloco JSON.`;
+Se nao houver acoes, apenas responda normalmente sem JSON.`;
 
-    // Construir historico de conversa
-    const messages = [
+    // Construir mensagens para AIService
+    const messages: AIMessage[] = [
       { role: "system", content: systemPrompt },
       ...conversationHistory.slice(-10).map(m => ({
-        role: m.role,
+        role: m.role as "user" | "assistant",
         content: m.content,
       })),
       { role: "user", content: userMessage },
     ];
 
-    // Chamar API Anthropic
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: this.model,
-        max_tokens: 1000,
-        system: messages[0].content,
-        messages: messages.slice(1).map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-      }),
+    // Usar AIService centralizado
+    const ai = getAIService();
+    const result = await ai.complete({
+      task: "editor_chat",
+      messages,
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Chat API error: ${error}`);
-    }
-
-    const data = await response.json();
-    const assistantMessage = data.content?.[0]?.text || "";
+    const assistantMessage = result.content;
 
     // Extrair acoes do JSON se houver
     const actions: EditAction[] = [];

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Download, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface ExportButtonProps {
   projectId: string;
@@ -71,11 +72,17 @@ export function ExportButton({
             setDownloadUrl(statusData.downloadUrl);
             clearInterval(interval);
             setPollInterval(null);
+            toast.success("Exportação concluída!", {
+              description: "Seu podcast está pronto para download.",
+            });
           } else if (statusData.status === "failed") {
             setStatus("error");
             setErrorMessage(statusData.error || "Export failed");
             clearInterval(interval);
             setPollInterval(null);
+            toast.error("Erro na exportação", {
+              description: statusData.error || "Falha ao exportar o podcast.",
+            });
           } else if (statusData.progress) {
             setProgress(statusData.progress);
           }

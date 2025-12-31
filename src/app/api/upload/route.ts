@@ -138,16 +138,31 @@ async function uploadAudioFile(
     // Use S3 for production
     return await uploadToS3(buffer, filename, contentType, s3Bucket, s3Region);
   } else {
-    // Use local storage or mock URL for development
+    // Use local storage for development
     console.warn(
-      "[Upload] S3 not configured, using mock storage. Set AWS_* environment variables for production."
+      "[Upload] S3 not configured, using local storage. Set AWS_* environment variables for production."
     );
 
-    // In a real MVP, you might save to local filesystem here
-    // For now, return a mock URL
-    const mockUrl = `http://localhost:3000/uploads/${Date.now()}-${filename}`;
-    console.log(`[Upload] Mock audio URL: ${mockUrl}`);
-    return mockUrl;
+    // Save to local filesystem
+    const fs = await import("fs/promises");
+    const path = await import("path");
+
+    // Ensure uploads directory exists
+    const uploadsDir = path.join(process.cwd(), "public", "uploads");
+    await fs.mkdir(uploadsDir, { recursive: true });
+
+    // Generate unique filename
+    const uniqueFilename = `${Date.now()}-${filename}`;
+    const filePath = path.join(uploadsDir, uniqueFilename);
+
+    // Write file to disk
+    await fs.writeFile(filePath, buffer);
+
+    // Return URL path (relative to public directory)
+    const url = `/uploads/${uniqueFilename}`;
+    console.log(`[Upload] File saved to: ${filePath}`);
+    console.log(`[Upload] URL: ${url}`);
+    return url;
   }
 }
 

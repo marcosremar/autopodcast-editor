@@ -1,7 +1,11 @@
-import Anthropic from "@anthropic-ai/sdk";
-import type { SegmentAnalysis } from "@/lib/db/schema";
+/**
+ * Reorder Service
+ * Sugere reordenação de segmentos para criar narrativa coerente
+ * Usa AIService centralizado (Groq) em vez de Anthropic
+ */
 
-const REORDER_MODEL = "claude-3-5-sonnet-20241022";
+import { aiCompleteJSON } from "@/lib/ai/AIService";
+import type { SegmentAnalysis } from "@/lib/db/schema";
 
 export interface SegmentForReordering {
   id: string;
@@ -34,18 +38,11 @@ export interface ReorderOptions {
 }
 
 export class ReorderService {
-  private client: Anthropic | null = null;
   private useMock: boolean = false;
 
-  constructor(apiKey?: string, options?: { useMock?: boolean }) {
+  constructor(options?: { useMock?: boolean }) {
     this.useMock = options?.useMock ?? false;
-
-    if (!this.useMock) {
-      if (!apiKey) {
-        throw new Error("Anthropic API key is required unless using mock mode");
-      }
-      this.client = new Anthropic({ apiKey });
-    }
+    // AIService é inicializado automaticamente via singleton
   }
 
   /**
@@ -59,30 +56,10 @@ export class ReorderService {
       return this.generateMockReordering(segments, options);
     }
 
-    if (!this.client) {
-      throw new Error("Anthropic client not initialized");
-    }
-
     const prompt = this.buildReorderPrompt(segments, options);
 
     try {
-      const message = await this.client.messages.create({
-        model: REORDER_MODEL,
-        max_tokens: 4096,
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      });
-
-      const content = message.content[0];
-      if (content.type !== "text") {
-        throw new Error("Unexpected response type from Claude");
-      }
-
-      const result = JSON.parse(content.text);
+      const result = await aiCompleteJSON<ReorderResult>("segment_reorder", prompt);
       return this.validateReorderResult(result, segments);
     } catch (error) {
       console.error("Error reordering segments:", error);
@@ -93,7 +70,7 @@ export class ReorderService {
   }
 
   /**
-   * Builds the reordering prompt for Claude
+   * Builds the reordering prompt for AI
    */
   private buildReorderPrompt(
     segments: SegmentForReordering[],
@@ -173,7 +150,7 @@ Return ONLY valid JSON, no other text.`;
   }
 
   /**
-   * Validates the reorder result from Claude
+   * Validates the reorder result from AI
    */
   private validateReorderResult(
     result: any,
@@ -290,14 +267,11 @@ Return ONLY valid JSON, no other text.`;
  */
 export function createReorderService(
   options?: {
-    apiKey?: string;
     useMock?: boolean;
   }
 ): ReorderService {
-  const apiKey = options?.apiKey || process.env.ANTHROPIC_API_KEY;
   const useMock = options?.useMock ?? false;
-
-  return new ReorderService(apiKey, { useMock });
+  return new ReorderService({ useMock });
 }
 
 /**

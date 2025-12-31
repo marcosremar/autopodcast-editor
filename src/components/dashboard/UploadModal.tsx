@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Upload, X, FileAudio, Loader2 } from "lucide-react"
+import { toast } from "sonner"
 import {
   Dialog,
   DialogContent,
@@ -51,6 +52,7 @@ export function UploadModal({
   const [error, setError] = useState("")
   const [uploadProgress, setUploadProgress] = useState(0)
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState<"uploading" | "processing" | "done">("uploading")
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const resetForm = useCallback(() => {
@@ -59,6 +61,7 @@ export function UploadModal({
     setError("")
     setUploadProgress(0)
     setIsUploading(false)
+    setUploadStatus("uploading")
   }, [])
 
   const handleClose = useCallback(() => {
@@ -173,6 +176,9 @@ export function UploadModal({
       const data = await response.json()
       const projectId = data.projectId
 
+      // Change status to processing
+      setUploadStatus("processing")
+
       // Start processing automatically
       if (projectId) {
         try {
@@ -185,17 +191,29 @@ export function UploadModal({
         }
       }
 
+      // Mark as done
+      setUploadStatus("done")
+
+      // Show success toast
+      toast.success("Upload concluído!", {
+        description: "Seu podcast está sendo processado em segundo plano.",
+      })
+
       // Success
       setTimeout(() => {
         resetForm()
         onUploadSuccess()
         onClose()
-      }, 500)
+      }, 1000)
     } catch (err) {
       console.error("Upload error:", err)
-      setError("Failed to upload file. Please try again.")
+      const errorMessage = "Falha ao fazer upload. Tente novamente."
+      setError(errorMessage)
       setIsUploading(false)
       setUploadProgress(0)
+      toast.error("Erro no upload", {
+        description: errorMessage,
+      })
     }
   }
 
@@ -324,10 +342,19 @@ export function UploadModal({
               className="space-y-2"
             >
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Uploading...</span>
+                <span className="text-muted-foreground">
+                  {uploadStatus === "uploading" && "Uploading arquivo..."}
+                  {uploadStatus === "processing" && "Iniciando processamento..."}
+                  {uploadStatus === "done" && "Concluído!"}
+                </span>
                 <span className="font-medium">{uploadProgress}%</span>
               </div>
               <Progress value={uploadProgress} />
+              {uploadStatus === "processing" && (
+                <p className="text-xs text-muted-foreground">
+                  Seu podcast será transcrito e analisado em segundo plano
+                </p>
+              )}
             </motion.div>
           )}
 

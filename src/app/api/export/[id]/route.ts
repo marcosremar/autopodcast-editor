@@ -38,7 +38,7 @@ export async function POST(
     const project = projectResults[0];
 
     // Check if project is ready for export
-    if (project.status !== "ready") {
+    if (project.status !== "ready" && project.status !== "completed") {
       return NextResponse.json(
         {
           error: `Project is not ready for export. Current status: ${project.status}`,
@@ -215,14 +215,114 @@ async function generateRealExport(
     order: number | null;
   }>
 ): Promise<string> {
-  // This is a placeholder for real FFmpeg implementation
-  // You would:
-  // 1. Download the original audio file
-  // 2. Use fluent-ffmpeg to extract and concatenate segments
-  // 3. Upload the result to S3
-  // 4. Return the S3 URL
+  const ffmpeg = (await import("fluent-ffmpeg")).default;
+  const fs = await import("fs/promises");
+  const path = await import("path");
+  const { promisify } = await import("util");
 
-  throw new Error("Real FFmpeg export not implemented yet");
+  // Resolve original audio file path
+  let audioPath: string;
+  if (originalAudioUrl.startsWith("/")) {
+    // Relative to public directory
+    audioPath = path.join(process.cwd(), "public", originalAudioUrl);
+  } else if (originalAudioUrl.startsWith("http")) {
+    throw new Error("HTTP URLs not supported yet. Use local files.");
+  } else {
+    audioPath = originalAudioUrl;
+  }
+
+  console.log(`[Export] Processing audio file: ${audioPath}`);
+
+  // Create exports directory
+  const exportsDir = path.join(process.cwd(), "public", "exports");
+  await fs.mkdir(exportsDir, { recursive: true });
+
+  // Generate unique filename
+  const timestamp = Date.now();
+  const segmentCount = selectedSegments.length;
+  const totalDuration = selectedSegments.reduce(
+    (sum, seg) => sum + (seg.endTime - seg.startTime),
+    0
+  );
+
+  const outputFilename = `edited-${timestamp}-${segmentCount}seg-${Math.floor(totalDuration)}s.mp3`;
+  const outputPath = path.join(exportsDir, outputFilename);
+  const tempDir = path.join(exportsDir, `temp-${timestamp}`);
+
+  try {
+    // Create temp directory for segment files
+    await fs.mkdir(tempDir, { recursive: true });
+
+    console.log(`[Export] Extracting ${segmentCount} segments...`);
+
+    // Extract each segment
+    const segmentFiles: string[] = [];
+    for (let i = 0; i < selectedSegments.length; i++) {
+      const segment = selectedSegments[i];
+      const segmentPath = path.join(tempDir, `segment-${i}.mp3`);
+
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(audioPath)
+          .setStartTime(segment.startTime)
+          .setDuration(segment.endTime - segment.startTime)
+          .output(segmentPath)
+          .on("end", () => {
+            console.log(`[Export] Extracted segment ${i + 1}/${segmentCount}`);
+            resolve();
+          })
+          .on("error", (err) => {
+            console.error(`[Export] Error extracting segment ${i}:`, err);
+            reject(err);
+          })
+          .run();
+      });
+
+      segmentFiles.push(segmentPath);
+    }
+
+    console.log(`[Export] Concatenating ${segmentCount} segments...`);
+
+    // Create concat file list
+    const concatListPath = path.join(tempDir, "concat-list.txt");
+    const concatListContent = segmentFiles
+      .map((f) => `file '${f}'`)
+      .join("\n");
+    await fs.writeFile(concatListPath, concatListContent);
+
+    // Concatenate all segments
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg()
+        .input(concatListPath)
+        .inputOptions(["-f", "concat", "-safe", "0"])
+        .outputOptions(["-c", "copy"])
+        .output(outputPath)
+        .on("end", () => {
+          console.log(`[Export] Concatenation complete`);
+          resolve();
+        })
+        .on("error", (err) => {
+          console.error(`[Export] Error concatenating:`, err);
+          reject(err);
+        })
+        .run();
+    });
+
+    // Clean up temp directory
+    await fs.rm(tempDir, { recursive: true, force: true });
+
+    const downloadUrl = `/exports/${outputFilename}`;
+    console.log(`[Export] Export complete: ${downloadUrl}`);
+
+    return downloadUrl;
+  } catch (error) {
+    // Clean up on error
+    try {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.error("[Export] Error during cleanup:", cleanupError);
+    }
+    throw error;
+  }
 }
 
 /**

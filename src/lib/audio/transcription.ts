@@ -1,11 +1,18 @@
 import Replicate from 'replicate';
 import Groq from 'groq-sdk';
 
+export interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
+
 export interface TranscriptionSegment {
   id: number;
   start: number; // seconds
   end: number; // seconds
   text: string;
+  words?: WordTimestamp[]; // Word-level timestamps
 }
 
 export interface TranscriptionResult {
@@ -165,22 +172,47 @@ export class GroqTranscriptionService implements TranscriptionService {
         model: 'whisper-large-v3',
         response_format: 'verbose_json',
         language: options.language || 'pt',
+        timestamp_granularities: ['word', 'segment'], // Enable word-level timestamps
       });
 
-      // Parse Groq response
+      // Parse Groq response with word timestamps
       const groqResult = transcription as unknown as {
         text: string;
-        segments: Array<{ start: number; end: number; text: string }>;
+        segments: Array<{
+          start: number;
+          end: number;
+          text: string;
+        }>;
+        words?: Array<{
+          word: string;
+          start: number;
+          end: number;
+        }>;
         language?: string;
         duration?: number;
       };
 
-      const segments: TranscriptionSegment[] = (groqResult.segments || []).map((s, index) => ({
-        id: index,
-        start: Math.round(s.start * 100) / 100,
-        end: Math.round(s.end * 100) / 100,
-        text: s.text.trim(),
-      }));
+      // Build word map for each segment
+      const words = groqResult.words || [];
+
+      const segments: TranscriptionSegment[] = (groqResult.segments || []).map((s, index) => {
+        // Find words that belong to this segment
+        const segmentWords: WordTimestamp[] = words
+          .filter(w => w.start >= s.start && w.end <= s.end)
+          .map(w => ({
+            word: w.word,
+            start: Math.round(w.start * 100) / 100,
+            end: Math.round(w.end * 100) / 100,
+          }));
+
+        return {
+          id: index,
+          start: Math.round(s.start * 100) / 100,
+          end: Math.round(s.end * 100) / 100,
+          text: s.text.trim(),
+          words: segmentWords.length > 0 ? segmentWords : undefined,
+        };
+      });
 
       return {
         text: groqResult.text || transcription.text,

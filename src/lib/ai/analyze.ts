@@ -1,9 +1,10 @@
-import Anthropic from "@anthropic-ai/sdk";
-import Groq from "groq-sdk";
-import type { SegmentAnalysis } from "@/lib/db/schema";
+/**
+ * Servico de Analise de Segmentos
+ * Usa AIService centralizado (Groq) para analisar segmentos de podcast
+ */
 
-const CLAUDE_MODEL = "claude-sonnet-4-20250514";
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+import type { SegmentAnalysis } from "@/lib/db/schema";
+import { getAIService, aiCompleteJSON } from "@/lib/ai/AIService";
 
 export interface SegmentWithContext {
   text: string;
@@ -17,46 +18,16 @@ export interface BatchAnalysisOptions {
 }
 
 export class AnalysisService {
-  private anthropicClient: Anthropic | null = null;
-  private groqClient: Groq | null = null;
   private useMock: boolean = false;
-  private provider: "anthropic" | "groq" = "groq";
 
-  constructor(options?: {
-    anthropicApiKey?: string;
-    groqApiKey?: string;
-    useMock?: boolean;
-    provider?: "anthropic" | "groq";
-  }) {
+  constructor(options?: { useMock?: boolean }) {
     this.useMock = options?.useMock ?? false;
-    this.provider = options?.provider ?? "groq";
-
-    if (!this.useMock) {
-      // Initialize Groq if available (preferred)
-      if (options?.groqApiKey) {
-        this.groqClient = new Groq({ apiKey: options.groqApiKey });
-        this.provider = "groq";
-      }
-      // Initialize Anthropic as fallback
-      if (options?.anthropicApiKey) {
-        this.anthropicClient = new Anthropic({ apiKey: options.anthropicApiKey });
-        if (!this.groqClient) {
-          this.provider = "anthropic";
-        }
-      }
-
-      if (!this.groqClient && !this.anthropicClient) {
-        throw new Error("Either Groq or Anthropic API key is required unless using mock mode");
-      }
-    }
   }
 
   /**
-   * Analyzes a single segment using Groq (Llama) or Claude
+   * Analyzes a single segment using AIService (Groq)
    */
-  async analyzeSegment(
-    segment: SegmentWithContext
-  ): Promise<SegmentAnalysis> {
+  async analyzeSegment(segment: SegmentWithContext): Promise<SegmentAnalysis> {
     if (this.useMock) {
       return this.generateMockAnalysis(segment);
     }
@@ -64,54 +35,11 @@ export class AnalysisService {
     const prompt = this.buildAnalysisPrompt(segment);
 
     try {
-      let responseText: string;
-
-      if (this.provider === "groq" && this.groqClient) {
-        // Use Groq (Llama)
-        const completion = await this.groqClient.chat.completions.create({
-          model: GROQ_MODEL,
-          messages: [
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-          temperature: 0.1,
-          max_tokens: 2048,
-          response_format: { type: "json_object" },
-        });
-
-        responseText = completion.choices[0]?.message?.content || "{}";
-      } else if (this.anthropicClient) {
-        // Use Claude
-        const message = await this.anthropicClient.messages.create({
-          model: CLAUDE_MODEL,
-          max_tokens: 2048,
-          messages: [
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-        });
-
-        const content = message.content[0];
-        if (content.type !== "text") {
-          throw new Error("Unexpected response type from Claude");
-        }
-        responseText = content.text;
-      } else {
-        throw new Error("No LLM client initialized");
-      }
-
-      // Extract JSON from response
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error("Could not extract JSON from response");
-      }
-
-      const analysis = JSON.parse(jsonMatch[0]);
-      return this.validateAndNormalizeAnalysis(analysis);
+      const result = await aiCompleteJSON<SegmentAnalysis>(
+        "segment_analysis",
+        prompt
+      );
+      return this.validateAndNormalizeAnalysis(result);
     } catch (error) {
       console.error("Error analyzing segment:", error);
       throw new Error(
@@ -165,7 +93,7 @@ export class AnalysisService {
   }
 
   /**
-   * Builds the analysis prompt for Claude
+   * Builds the analysis prompt
    */
   private buildAnalysisPrompt(segment: SegmentWithContext): string {
     const contextSection =
@@ -267,12 +195,11 @@ Return ONLY valid JSON, no other text. Example format:
   }
 
   /**
-   * Validates and normalizes the analysis from Claude
+   * Validates and normalizes the analysis
    */
   private validateAndNormalizeAnalysis(
     analysis: Partial<SegmentAnalysis>
   ): SegmentAnalysis {
-    // Ensure all required fields are present with defaults
     return {
       topic: analysis.topic || "Unknown",
       interestScore: this.clamp(analysis.interestScore ?? 50, 0, 100),
@@ -302,18 +229,15 @@ Return ONLY valid JSON, no other text. Example format:
     const duration = segment.endTime - segment.startTime;
     const wordCount = segment.text.split(/\s+/).length;
 
-    // Heuristics for mock data
     const hasQuestion = segment.text.includes("?");
     const hasUmAh = /\b(um|uh|ah|like)\b/i.test(segment.text);
     const isLong = duration > 30;
 
-    // Interest score based on length and content
     let interestScore = 60;
     if (hasQuestion) interestScore += 10;
     if (isLong) interestScore -= 10;
     if (wordCount > 100) interestScore -= 5;
 
-    // Clarity score based on filler words
     let clarityScore = 80;
     if (hasUmAh) clarityScore -= 20;
     if (wordCount < 5) clarityScore -= 10;
@@ -322,33 +246,32 @@ Return ONLY valid JSON, no other text. Example format:
       topic: this.extractMockTopic(segment.text),
       interestScore: this.clamp(interestScore, 0, 100),
       clarityScore: this.clamp(clarityScore, 0, 100),
-      isTangent: Math.random() < 0.1, // 10% chance
-      isRepetition: Math.random() < 0.05, // 5% chance
-      keyInsight: segment.text.slice(0, 100) + (segment.text.length > 100 ? "..." : ""),
+      isTangent: Math.random() < 0.1,
+      isRepetition: Math.random() < 0.05,
+      keyInsight:
+        segment.text.slice(0, 100) +
+        (segment.text.length > 100 ? "..." : ""),
       dependsOn: [],
       standalone: true,
       hasFactualError: false,
       hasContradiction: false,
       isConfusing: hasUmAh && wordCount < 10,
-      confusingDetail: hasUmAh && wordCount < 10 ? "Too many filler words" : undefined,
+      confusingDetail:
+        hasUmAh && wordCount < 10 ? "Too many filler words" : undefined,
       isIncomplete: segment.text.trim().endsWith("..."),
-      incompleteDetail: segment.text.trim().endsWith("...") ? "Thought appears incomplete" : undefined,
+      incompleteDetail: segment.text.trim().endsWith("...")
+        ? "Thought appears incomplete"
+        : undefined,
       needsRerecord: false,
     };
   }
 
-  /**
-   * Extract a mock topic from text
-   */
   private extractMockTopic(text: string): string {
     const words = text.split(/\s+/).filter((w) => w.length > 3);
     const topicWords = words.slice(0, 3).join(" ");
     return topicWords || "General discussion";
   }
 
-  /**
-   * Clamp a number between min and max
-   */
   private clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
   }
@@ -357,20 +280,10 @@ Return ONLY valid JSON, no other text. Example format:
 /**
  * Factory function to create an AnalysisService instance
  */
-export function createAnalysisService(
-  options?: {
-    useMock?: boolean;
-    provider?: "anthropic" | "groq";
-  }
-): AnalysisService {
-  const groqApiKey = process.env.GROQ_API_KEY;
-  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-  const useMock = options?.useMock ?? false;
-
+export function createAnalysisService(options?: {
+  useMock?: boolean;
+}): AnalysisService {
   return new AnalysisService({
-    groqApiKey,
-    anthropicApiKey,
-    useMock,
-    provider: options?.provider,
+    useMock: options?.useMock ?? false,
   });
 }

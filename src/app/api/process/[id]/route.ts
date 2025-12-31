@@ -4,14 +4,21 @@ import { eq } from "drizzle-orm";
 import Groq from "groq-sdk";
 import * as fs from "fs";
 import * as path from "path";
+import { aiCompleteJSON } from "@/lib/ai/AIService";
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GROQ_LLM_MODEL = "llama-3.3-70b-versatile";
+
+interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
 
 interface TranscriptionSegment {
   start: number;
   end: number;
   text: string;
+  words?: WordTimestamp[];
 }
 
 interface SegmentAnalysis {
@@ -142,15 +149,15 @@ async function processInBackground(projectId: string, audioUrl: string) {
     console.log(`[Pipeline] Analyzing segments...`);
     const context = transcription.slice(0, 5).map(s => s.text).join(" ").substring(0, 500);
     const previousTopics: string[] = [];
-    const analyzedSegments: Array<TranscriptionSegment & { analysis: SegmentAnalysis }> = [];
+    const analyzedSegments: Array<TranscriptionSegment & { analysis: SegmentAnalysis; words?: WordTimestamp[] }> = [];
 
     for (let i = 0; i < transcription.length; i++) {
       const seg = transcription[i];
       console.log(`[Pipeline] Analyzing segment ${i + 1}/${transcription.length}`);
 
       try {
-        const analysis = await analyzeSegment(groq, seg, context, previousTopics.slice(-5));
-        analyzedSegments.push({ ...seg, analysis });
+        const analysis = await analyzeSegment(seg, context, previousTopics.slice(-5));
+        analyzedSegments.push({ ...seg, analysis, words: seg.words });
         previousTopics.push(analysis.topic);
       } catch (error) {
         console.error(`[Pipeline] Error analyzing segment ${i}:`, error);
@@ -169,6 +176,7 @@ async function processInBackground(projectId: string, audioUrl: string) {
             isIncomplete: false,
             needsRerecord: false,
           },
+          words: seg.words,
         });
       }
 
@@ -190,7 +198,7 @@ async function processInBackground(projectId: string, audioUrl: string) {
     // 4. Delete existing segments for this project
     await db.delete(segments).where(eq(segments.projectId, projectId));
 
-    // 5. Insert new segments
+    // 5. Insert new segments with word timestamps
     console.log(`[Pipeline] Saving ${analyzedSegments.length} segments to database...`);
     for (let i = 0; i < analyzedSegments.length; i++) {
       const seg = analyzedSegments[i];
@@ -211,10 +219,28 @@ async function processInBackground(projectId: string, audioUrl: string) {
         hasError: seg.analysis.hasFactualError || seg.analysis.hasContradiction,
         errorType: seg.analysis.hasFactualError ? "factual" : seg.analysis.hasContradiction ? "contradiction" : null,
         errorDetail: seg.analysis.hasFactualError ? "Erro factual detectado" : seg.analysis.hasContradiction ? "Contradicao detectada" : null,
+        wordTimestamps: seg.words as any, // Save word-level timestamps for text-based editing
       });
     }
 
-    // 6. Update project status
+    // 6. Detect filler words
+    console.log(`[Pipeline] Detecting filler words...`);
+    try {
+      const { processProjectFillers } = await import("@/lib/audio/filler-detection");
+      const fillerResult = await processProjectFillers(projectId);
+      console.log(`[Pipeline] Detected ${fillerResult.stats.totalCount} filler words`);
+
+      // Update filler count in project
+      await db
+        .update(projects)
+        .set({ fillerWordsCount: fillerResult.stats.totalCount, updatedAt: new Date() })
+        .where(eq(projects.id, projectId));
+    } catch (fillerError) {
+      console.warn(`[Pipeline] Filler detection failed (non-critical):`, fillerError);
+      // Continue pipeline even if filler detection fails
+    }
+
+    // 7. Update project status
     await db
       .update(projects)
       .set({ status: "completed", progress: 100, updatedAt: new Date() })
@@ -224,10 +250,28 @@ async function processInBackground(projectId: string, audioUrl: string) {
   } catch (error) {
     console.error(`[Pipeline] Error processing project ${projectId}:`, error);
 
-    // Update project status to failed
+    // Extract error message
+    let errorMessage = "Unknown error occurred";
+    if (error instanceof Error) {
+      errorMessage = error.message;
+      // If it's a Groq API error, extract the message
+      if ('error' in error && typeof error.error === 'object' && error.error !== null) {
+        const apiError = error.error as any;
+        if (apiError.message) {
+          errorMessage = `API Error: ${apiError.message}`;
+        }
+      }
+    }
+
+    // Update project status to failed with error message
     await db
       .update(projects)
-      .set({ status: "failed", updatedAt: new Date() })
+      .set({
+        status: "failed",
+        errorMessage,
+        progress: 0, // Reset progress on failure
+        updatedAt: new Date()
+      })
       .where(eq(projects.id, projectId));
   }
 }
@@ -265,24 +309,39 @@ async function transcribeAudio(groq: Groq, audioUrl: string): Promise<Transcript
     model: "whisper-large-v3",
     response_format: "verbose_json",
     language: "pt",
+    timestamp_granularities: ["word", "segment"], // Enable word-level timestamps
   });
 
   const result = transcription as unknown as {
     segments: Array<{ start: number; end: number; text: string }>;
+    words?: Array<{ word: string; start: number; end: number }>;
   };
 
-  return (result.segments || []).map((s) => ({
-    start: Math.round(s.start * 100) / 100,
-    end: Math.round(s.end * 100) / 100,
-    text: s.text.trim(),
-  }));
+  const words = result.words || [];
+
+  return (result.segments || []).map((s) => {
+    // Find words that belong to this segment
+    const segmentWords: WordTimestamp[] = words
+      .filter(w => w.start >= s.start && w.end <= s.end)
+      .map(w => ({
+        word: w.word,
+        start: Math.round(w.start * 100) / 100,
+        end: Math.round(w.end * 100) / 100,
+      }));
+
+    return {
+      start: Math.round(s.start * 100) / 100,
+      end: Math.round(s.end * 100) / 100,
+      text: s.text.trim(),
+      words: segmentWords.length > 0 ? segmentWords : undefined,
+    };
+  });
 }
 
 /**
- * Analyze a segment using Groq Llama
+ * Analyze a segment using AIService
  */
 async function analyzeSegment(
-  groq: Groq,
   segment: TranscriptionSegment,
   context: string,
   previousTopics: string[]
@@ -320,21 +379,7 @@ Retorne APENAS um JSON valido:
   "rerecordSuggestion": "sugestao se precisar regravar"
 }`;
 
-  const response = await groq.chat.completions.create({
-    model: GROQ_LLM_MODEL,
-    max_tokens: 500,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  const content = response.choices[0]?.message?.content || "{}";
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error("JSON not found in response");
-  }
-
-  return JSON.parse(jsonMatch[0]) as SegmentAnalysis;
+  return await aiCompleteJSON<SegmentAnalysis>("segment_analysis", prompt);
 }
 
 /**

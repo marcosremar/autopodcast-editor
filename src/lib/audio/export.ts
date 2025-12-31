@@ -283,3 +283,282 @@ export function createExportService(useMock = false): ExportService {
 
   return new FFmpegExportService();
 }
+
+// ============================================
+// Template-Based Export Service
+// ============================================
+
+export interface SectionExportSettings {
+  sectionId: string;
+  volume: number; // 0-200 (percentage)
+  fadeIn: number; // seconds
+  fadeOut: number; // seconds
+  trimStart: number; // seconds
+  trimEnd: number; // seconds
+  normalizeVolume: boolean;
+}
+
+export interface TemplateExportOptions {
+  projectId: string;
+  sections: Array<{
+    sectionId: string;
+    order: number;
+    segments: Array<{
+      audioPath: string;
+      startTime: number;
+      endTime: number;
+    }>;
+    settings?: SectionExportSettings;
+  }>;
+  outputFormat?: 'mp3' | 'wav' | 'aac' | 'ogg';
+  bitrate?: string;
+  crossfadeDuration?: number;
+  normalizeOutput?: boolean;
+}
+
+export class TemplateExportService {
+  private ffmpegService: FFmpegExportService;
+
+  constructor() {
+    this.ffmpegService = new FFmpegExportService();
+  }
+
+  /**
+   * Export a project based on template section ordering
+   * Processes each section with its editing rules and concatenates
+   */
+  async exportTemplateBasedProject(options: TemplateExportOptions): Promise<Buffer> {
+    const { sections, outputFormat = 'mp3', bitrate = '192k', crossfadeDuration = 0.3 } = options;
+
+    if (sections.length === 0) {
+      throw new Error('No sections to export');
+    }
+
+    // Sort sections by order
+    const sortedSections = [...sections].sort((a, b) => a.order - b.order);
+
+    // Process each section
+    const sectionBuffers: Buffer[] = [];
+
+    for (const section of sortedSections) {
+      if (section.segments.length === 0) {
+        console.warn(`Section ${section.sectionId} has no segments, skipping`);
+        continue;
+      }
+
+      // Concatenate segments within this section
+      const sectionBuffer = await this.processSectionSegments(section, outputFormat);
+
+      // Apply section-level settings if provided
+      if (section.settings) {
+        const processedBuffer = await this.applySectionSettings(
+          sectionBuffer,
+          section.settings,
+          outputFormat
+        );
+        sectionBuffers.push(processedBuffer);
+      } else {
+        sectionBuffers.push(sectionBuffer);
+      }
+    }
+
+    if (sectionBuffers.length === 0) {
+      throw new Error('No sections with content to export');
+    }
+
+    if (sectionBuffers.length === 1) {
+      return sectionBuffers[0];
+    }
+
+    // Concatenate all sections with crossfade
+    return this.concatenateSectionBuffers(sectionBuffers, {
+      crossfadeDuration,
+      outputFormat,
+      bitrate,
+    });
+  }
+
+  /**
+   * Process segments within a section
+   */
+  private async processSectionSegments(
+    section: TemplateExportOptions['sections'][0],
+    outputFormat: string
+  ): Promise<Buffer> {
+    const { segments } = section;
+
+    if (segments.length === 1) {
+      const seg = segments[0];
+      return this.ffmpegService.extractSegment({
+        inputPath: seg.audioPath,
+        startTime: seg.startTime,
+        endTime: seg.endTime,
+        outputFormat: outputFormat as any,
+      });
+    }
+
+    // Multiple segments - concatenate them
+    return this.ffmpegService.concatenateSegments({
+      segments: segments.map(seg => ({
+        path: seg.audioPath,
+        startTime: seg.startTime,
+        endTime: seg.endTime,
+      })),
+      crossfadeDuration: 0.1, // Small crossfade within section
+      outputFormat: outputFormat as any,
+    });
+  }
+
+  /**
+   * Apply section-level editing settings (volume, fade, trim)
+   */
+  private async applySectionSettings(
+    inputBuffer: Buffer,
+    settings: SectionExportSettings,
+    outputFormat: string
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const { PassThrough } = require('stream');
+      const chunks: Buffer[] = [];
+      const stream = new PassThrough();
+
+      stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', reject);
+
+      // Create input stream from buffer
+      const inputStream = new PassThrough();
+      inputStream.end(inputBuffer);
+
+      const ffmpeg = require('fluent-ffmpeg');
+      const command = ffmpeg(inputStream);
+
+      // Build audio filters
+      const audioFilters: string[] = [];
+
+      // Volume adjustment
+      if (settings.volume !== 100) {
+        const volumeMultiplier = settings.volume / 100;
+        audioFilters.push(`volume=${volumeMultiplier}`);
+      }
+
+      // Fade in
+      if (settings.fadeIn > 0) {
+        audioFilters.push(`afade=t=in:st=0:d=${settings.fadeIn}`);
+      }
+
+      // Fade out (requires duration - will be calculated from input)
+      if (settings.fadeOut > 0) {
+        // Note: For proper fade out, we'd need to know duration
+        // For now, we apply a generic fade out at the end
+        audioFilters.push(`afade=t=out:st=-${settings.fadeOut}:d=${settings.fadeOut}`);
+      }
+
+      // Normalize volume
+      if (settings.normalizeVolume) {
+        audioFilters.push('loudnorm=I=-16:LRA=11:TP=-1.5');
+      }
+
+      // Trim
+      if (settings.trimStart > 0 || settings.trimEnd > 0) {
+        command.setStartTime(settings.trimStart);
+        // Note: For trim end, we'd need to calculate based on duration
+      }
+
+      if (audioFilters.length > 0) {
+        command.audioFilters(audioFilters);
+      }
+
+      command
+        .audioCodec(this.getCodec(outputFormat))
+        .format(outputFormat)
+        .on('error', reject);
+
+      command.pipe(stream, { end: true });
+    });
+  }
+
+  /**
+   * Concatenate section buffers with crossfade
+   */
+  private async concatenateSectionBuffers(
+    buffers: Buffer[],
+    options: {
+      crossfadeDuration: number;
+      outputFormat: string;
+      bitrate: string;
+    }
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const { PassThrough } = require('stream');
+      const chunks: Buffer[] = [];
+      const stream = new PassThrough();
+
+      stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', reject);
+
+      const ffmpeg = require('fluent-ffmpeg');
+      const command = ffmpeg();
+
+      // Add each buffer as an input
+      buffers.forEach((buffer, index) => {
+        const inputStream = new PassThrough();
+        inputStream.end(buffer);
+        command.input(inputStream);
+      });
+
+      // Build concatenation filter
+      if (options.crossfadeDuration > 0 && buffers.length > 1) {
+        // Crossfade between sections
+        let filterComplex = '';
+        let previousOutput = '[0:a]';
+
+        for (let i = 1; i < buffers.length; i++) {
+          const currentInput = `[${i}:a]`;
+          const outputLabel = i === buffers.length - 1 ? '[out]' : `[a${i}]`;
+          filterComplex += `${previousOutput}${currentInput}acrossfade=d=${options.crossfadeDuration}:c1=tri:c2=tri${outputLabel};`;
+          previousOutput = outputLabel;
+        }
+
+        filterComplex = filterComplex.slice(0, -1);
+
+        command
+          .complexFilter(filterComplex)
+          .outputOptions(['-map', '[out]']);
+      } else {
+        // Simple concatenation
+        const filterComplex = buffers
+          .map((_, i) => `[${i}:a]`)
+          .join('') + `concat=n=${buffers.length}:v=0:a=1[out]`;
+
+        command
+          .complexFilter(filterComplex)
+          .outputOptions(['-map', '[out]']);
+      }
+
+      command
+        .audioCodec(this.getCodec(options.outputFormat))
+        .audioBitrate(options.bitrate)
+        .format(options.outputFormat)
+        .on('error', reject);
+
+      command.pipe(stream, { end: true });
+    });
+  }
+
+  private getCodec(format: string): string {
+    const codecs: Record<string, string> = {
+      mp3: 'libmp3lame',
+      wav: 'pcm_s16le',
+      aac: 'aac',
+      ogg: 'libvorbis',
+    };
+    return codecs[format] || 'libmp3lame';
+  }
+}
+
+// Factory for template export service
+export function createTemplateExportService(): TemplateExportService {
+  return new TemplateExportService();
+}

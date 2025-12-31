@@ -1,7 +1,7 @@
 "use client"
 
 import { motion } from "framer-motion"
-import { Clock, Trash2 } from "lucide-react"
+import { Clock, Trash2, Timer } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import {
@@ -32,6 +32,7 @@ interface Project {
   duration: number
   createdAt: string
   progress?: number
+  errorMessage?: string | null
 }
 
 interface ProjectCardProps {
@@ -41,16 +42,52 @@ interface ProjectCardProps {
 
 const statusConfig: Record<
   ProjectStatus,
-  { variant: "default" | "secondary" | "destructive" | "outline"; label: string }
+  {
+    variant: "default" | "secondary" | "destructive" | "outline";
+    label: string;
+    description?: string;
+  }
 > = {
-  uploading: { variant: "secondary", label: "Uploading" },
-  uploaded: { variant: "secondary", label: "Processing" },
-  transcribing: { variant: "secondary", label: "Transcribing" },
-  analyzing: { variant: "secondary", label: "Analyzing" },
-  ready: { variant: "default", label: "Ready" },
-  completed: { variant: "default", label: "Completed" },
-  failed: { variant: "destructive", label: "Failed" },
-  error: { variant: "destructive", label: "Error" },
+  uploading: {
+    variant: "secondary",
+    label: "Uploading",
+    description: "Enviando arquivo de áudio..."
+  },
+  uploaded: {
+    variant: "secondary",
+    label: "Processing",
+    description: "Preparando para transcrição..."
+  },
+  transcribing: {
+    variant: "secondary",
+    label: "Transcribing",
+    description: "Convertendo áudio em texto com IA..."
+  },
+  analyzing: {
+    variant: "secondary",
+    label: "Analyzing",
+    description: "Analisando segmentos e qualidade..."
+  },
+  ready: {
+    variant: "default",
+    label: "Ready",
+    description: "Pronto para editar"
+  },
+  completed: {
+    variant: "default",
+    label: "Completed",
+    description: "Processamento concluído"
+  },
+  failed: {
+    variant: "destructive",
+    label: "Failed",
+    description: "Falha no processamento"
+  },
+  error: {
+    variant: "destructive",
+    label: "Error",
+    description: "Erro durante processamento"
+  },
 }
 
 function formatDuration(seconds: number | null | undefined): string {
@@ -78,6 +115,44 @@ function formatDate(dateString: string): string {
       day: "numeric",
       year: "numeric",
     })
+  }
+}
+
+function getEstimatedTimeRemaining(status: ProjectStatus, progress: number = 0, duration: number = 0): string | null {
+  // Base estimates in seconds per minute of audio
+  const estimates = {
+    uploading: 5, // ~5 seconds
+    uploaded: 10, // ~10 seconds
+    transcribing: 30, // ~30 seconds per minute
+    analyzing: 15, // ~15 seconds per minute
+  }
+
+  if (!["uploading", "uploaded", "transcribing", "analyzing"].includes(status)) {
+    return null
+  }
+
+  // Calculate base time estimate
+  let baseEstimate = estimates[status as keyof typeof estimates] || 30
+
+  // For transcribing and analyzing, scale by duration
+  if ((status === "transcribing" || status === "analyzing") && duration > 0) {
+    const minutes = Math.ceil(duration / 60)
+    baseEstimate = baseEstimate * minutes
+  } else {
+    // Default estimate if no duration
+    baseEstimate = status === "uploading" ? 5 : 30
+  }
+
+  // Calculate remaining based on progress
+  const remaining = baseEstimate * ((100 - progress) / 100)
+
+  if (remaining < 10) {
+    return "menos de 10 segundos"
+  } else if (remaining < 60) {
+    return `~${Math.ceil(remaining / 10) * 10} segundos`
+  } else {
+    const minutes = Math.ceil(remaining / 60)
+    return `~${minutes} ${minutes === 1 ? "minuto" : "minutos"}`
   }
 }
 
@@ -164,11 +239,54 @@ export function ProjectCard({ project, onDelete }: ProjectCardProps) {
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">
-                  Processing...
+                  {statusInfo.description || "Processing..."}
                 </span>
                 <span className="font-medium">{project.progress}%</span>
               </div>
               <Progress value={project.progress} />
+              <div className="flex items-center justify-between text-xs">
+                {project.status === "analyzing" ? (
+                  <p className="text-muted-foreground">
+                    Avaliando interesse, clareza e qualidade
+                  </p>
+                ) : (
+                  <p className="text-muted-foreground">
+                    {statusInfo.description}
+                  </p>
+                )}
+                {getEstimatedTimeRemaining(project.status as ProjectStatus, project.progress, project.duration) && (
+                  <span className="flex items-center gap-1 text-muted-foreground">
+                    <Timer className="h-3 w-3" />
+                    {getEstimatedTimeRemaining(project.status as ProjectStatus, project.progress, project.duration)}
+                  </span>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        )}
+
+        {(project.status === "failed" || project.status === "error") && project.errorMessage && (
+          <CardContent>
+            <div className="rounded-md bg-destructive/10 p-3">
+              <p className="text-sm text-destructive font-medium mb-1">
+                Processing Failed
+              </p>
+              <p className="text-xs text-destructive/80">
+                {project.errorMessage}
+              </p>
+            </div>
+          </CardContent>
+        )}
+
+        {(project.status === "ready" || project.status === "completed") && project.duration && (
+          <CardContent className="pt-0">
+            <div className="text-xs text-muted-foreground">
+              <span className="font-medium">Ready to edit</span>
+              {project.duration > 0 && (
+                <span className="ml-2">
+                  • {formatDuration(project.duration)} of audio
+                </span>
+              )}
             </div>
           </CardContent>
         )}

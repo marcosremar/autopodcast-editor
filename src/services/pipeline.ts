@@ -11,10 +11,17 @@ export interface TranscriptionResult {
   segments: TranscriptSegment[];
 }
 
+export interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
+
 export interface TranscriptSegment {
   start: number;
   end: number;
   text: string;
+  words?: WordTimestamp[];
 }
 
 export interface AnalysisService {
@@ -31,6 +38,7 @@ export interface SegmentWithAnalysis {
   endTime: number;
   text: string;
   analysis: SegmentAnalysis;
+  wordTimestamps?: WordTimestamp[];
 }
 
 export interface OrderSuggestion {
@@ -81,6 +89,20 @@ export class PodcastPipeline {
         transcription: transcriptionResult.text,
       });
 
+      // Step 1.5: Detect content type (optional, async)
+      try {
+        const { ContentDetectionService } = await import("@/lib/ai/ContentDetectionService");
+        const contentDetection = new ContentDetectionService(this.database);
+        await contentDetection.detectAndSave(
+          projectId,
+          transcriptionResult.text
+        );
+        console.log(`[Pipeline] Content type detected for project ${projectId}`);
+      } catch (error) {
+        console.warn(`[Pipeline] Content detection failed (non-critical):`, error);
+        // Continue pipeline even if detection fails
+      }
+
       // Step 2: Chunk into segments (30-60s)
       const chunkedSegments = this.chunkSegments(
         transcriptionResult.segments,
@@ -130,7 +152,7 @@ export class PodcastPipeline {
 
     for (const segment of segments) {
       if (!currentChunk) {
-        currentChunk = { ...segment };
+        currentChunk = { ...segment, words: segment.words ? [...segment.words] : undefined };
         continue;
       }
 
@@ -142,16 +164,24 @@ export class PodcastPipeline {
         // Only save if it meets minimum duration
         if (currentDuration >= minDuration) {
           chunks.push(currentChunk);
-          currentChunk = { ...segment };
+          currentChunk = { ...segment, words: segment.words ? [...segment.words] : undefined };
         } else {
           // Extend current chunk even if it exceeds max slightly
           currentChunk.end = segment.end;
           currentChunk.text += " " + segment.text;
+          // Merge word timestamps
+          if (segment.words) {
+            currentChunk.words = [...(currentChunk.words || []), ...segment.words];
+          }
         }
       } else {
         // Merge segments
         currentChunk.end = segment.end;
         currentChunk.text += " " + segment.text;
+        // Merge word timestamps
+        if (segment.words) {
+          currentChunk.words = [...(currentChunk.words || []), ...segment.words];
+        }
       }
     }
 
@@ -185,6 +215,7 @@ export class PodcastPipeline {
           endTime: segment.end,
           text: segment.text,
           analysis,
+          wordTimestamps: segment.words,
         });
       } catch (error) {
         console.error("Error analyzing segment:", error);
@@ -195,6 +226,7 @@ export class PodcastPipeline {
           endTime: segment.end,
           text: segment.text,
           analysis: this.getDefaultAnalysis(),
+          wordTimestamps: segment.words,
         });
       }
     }
@@ -293,6 +325,7 @@ export class PodcastPipeline {
         hasError: analysis.needsRerecord,
         errorType: analysis.needsRerecord ? "needs_rerecord" : null,
         errorDetail: analysis.rerecordSuggestion || null,
+        wordTimestamps: segment.wordTimestamps as any, // Word-level timestamps for text-based editing
       };
     });
 
