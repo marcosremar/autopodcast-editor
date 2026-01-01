@@ -79,7 +79,6 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
     // Auto-switch to preview mode when previewRange is provided
     useEffect(() => {
       if (previewRange && previewRange.segmentIds.length > 0) {
-        console.log("[Timeline] Switching to preview mode with segments:", previewRange.segmentIds);
         setMode("preview");
 
         // Scroll to first focused segment
@@ -87,13 +86,10 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
         const firstSegment = segments.find(s => s.id === firstFocusedSegmentId);
 
         if (firstSegment && timelineRef.current) {
-          console.log("[Timeline] Scrolling to segment:", firstSegment.id, "at time:", firstSegment.startTime);
-
           // Small delay to ensure preview mode is rendered
           setTimeout(() => {
             const segmentElement = timelineRef.current?.querySelector(`[data-segment-id="${firstSegment.id}"]`);
             if (segmentElement) {
-              console.log("[Timeline] Found segment element, scrolling...");
               segmentElement.scrollIntoView({
                 behavior: "smooth",
                 block: "center",
@@ -112,15 +108,9 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                   behavior: 'smooth'
                 });
               }
-            } else {
-              console.log("[Timeline] Segment element not found!");
             }
           }, 100);
-        } else {
-          console.log("[Timeline] First segment not found or timelineRef is null");
         }
-      } else if (!previewRange) {
-        console.log("[Timeline] Preview range cleared, returning to full mode");
       }
     }, [previewRange, segments]);
 
@@ -222,7 +212,6 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
             for (const cut of textCuts) {
               if (currentTime >= cut.startTime && currentTime < cut.endTime) {
                 // Skip to end of cut region
-                console.log("[Timeline] Skipping cut region:", cut.startTime, "->", cut.endTime);
                 audio.currentTime = cut.endTime;
                 return; // Exit early to avoid further processing
               }
@@ -244,12 +233,10 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
               if (previewLoop) {
                 // Loop back to start
                 audio.currentTime = minTime;
-                console.log("[Timeline] Preview loop - jumping to start:", minTime);
               } else {
                 // Stop playback
                 audio.pause();
                 audio.currentTime = minTime;
-                console.log("[Timeline] Preview ended - stopping at:", minTime);
               }
             }
           }
@@ -275,7 +262,6 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
             const minTime = Math.min(...previewSegments.map(s => s.startTime));
             audio.currentTime = minTime;
             audio.play();
-            console.log("[Timeline] Preview loop on ended - restarting from:", minTime);
           }
         }
       };

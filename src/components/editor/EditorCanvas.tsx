@@ -187,7 +187,6 @@ export function EditorCanvas({
     // In "full" mode (original), ALWAYS scroll to segment (even if excluded)
     // In "edited" mode, don't scroll if we came from a gap
     if (viewMode !== "full" && cameFromGap) {
-      console.log("[EditorCanvas] Not scrolling - came from gap (edited mode)");
       return;
     }
 
