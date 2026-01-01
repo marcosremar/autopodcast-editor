@@ -1,5 +1,9 @@
 import { db, projects, segments as segmentsTable, type Project, type NewSegment, type SegmentAnalysis } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { ForcedAlignerService, getForcedAlignerService } from "@/lib/audio/forced-aligner";
+import { diarize, alignWithTranscript, getSpeakerDisplayNames, type DiarizationResult, type DiarizationSegment } from "@/services/pyannote";
+import { detectTopics, type TopicSegment } from "@/services/topic-segmentation";
+import { processProjectFillers } from "@/lib/audio/filler-detection";
 
 // Service interfaces for dependency injection
 export interface TranscriptionService {
@@ -39,6 +43,9 @@ export interface SegmentWithAnalysis {
   text: string;
   analysis: SegmentAnalysis;
   wordTimestamps?: WordTimestamp[];
+  speaker?: string;
+  speakerLabel?: string;
+  topicId?: number;
 }
 
 export interface OrderSuggestion {
@@ -55,13 +62,18 @@ export interface StorageService {
 
 // Main processing pipeline
 export class PodcastPipeline {
+  private forcedAligner: ForcedAlignerService;
+
   constructor(
     private transcription: TranscriptionService,
     private analysis: AnalysisService,
     private reorder: ReorderService,
     private storage: StorageService,
-    private database = db
-  ) {}
+    private database = db,
+    forcedAligner?: ForcedAlignerService
+  ) {
+    this.forcedAligner = forcedAligner || getForcedAlignerService();
+  }
 
   /**
    * Process a podcast project through the entire pipeline
@@ -89,7 +101,21 @@ export class PodcastPipeline {
         transcription: transcriptionResult.text,
       });
 
-      // Step 1.5: Detect content type (optional, async)
+      // Step 1.5: Refine word timestamps with Forced Aligner
+      // This provides ~20ms precision vs ~100-200ms from Whisper
+      await this.updateStatus(projectId, "aligning");
+      const alignedSegments = await this.refineWordTimestamps(
+        project.originalAudioUrl,
+        transcriptionResult.segments
+      );
+
+      // Replace segments with aligned versions if successful
+      if (alignedSegments.length > 0) {
+        transcriptionResult.segments = alignedSegments;
+        console.log(`[Pipeline] Word timestamps refined with Forced Aligner`);
+      }
+
+      // Step 1.6: Detect content type (optional, async)
       try {
         const { ContentDetectionService } = await import("@/lib/ai/ContentDetectionService");
         const contentDetection = new ContentDetectionService(this.database);
@@ -103,6 +129,68 @@ export class PodcastPipeline {
         // Continue pipeline even if detection fails
       }
 
+      // Step 1.7: Speaker Diarization (identify who is speaking)
+      let diarizationResult: DiarizationResult | null = null;
+      let speakerNames: Record<string, string> = {};
+      try {
+        await this.updateStatus(projectId, "diarizing");
+        console.log(`[Pipeline] Starting speaker diarization...`);
+        diarizationResult = await diarize(project.originalAudioUrl);
+
+        if (diarizationResult.success && diarizationResult.speakers) {
+          speakerNames = getSpeakerDisplayNames(diarizationResult.speakers);
+
+          // Save diarization to project
+          await this.updateProject(projectId, {
+            diarization: diarizationResult as any,
+            speakers: diarizationResult.speakers as any,
+            speakerStats: diarizationResult.speaker_stats as any,
+          });
+
+          console.log(`[Pipeline] Diarization complete: ${diarizationResult.num_speakers} speakers`);
+        }
+      } catch (error) {
+        console.warn(`[Pipeline] Diarization failed (non-critical):`, error);
+        // Continue pipeline even if diarization fails
+      }
+
+      // Step 1.8: Topic Detection (identify chapters/themes)
+      let detectedTopics: TopicSegment[] = [];
+      let topicsSummary: string | undefined;
+      try {
+        await this.updateStatus(projectId, "detecting_topics");
+        console.log(`[Pipeline] Detecting topics...`);
+
+        // Prepare segments for topic detection
+        const segmentsForTopics = transcriptionResult.segments.map((s, i) => ({
+          id: i,
+          start: s.start,
+          end: s.end,
+          text: s.text,
+        }));
+
+        // Use OpenRouter with Gemini for topic detection
+        const topicResult = await detectTopics(segmentsForTopics, {
+          language: project.language || 'pt',
+        });
+
+        if (topicResult.success) {
+          detectedTopics = topicResult.topics;
+          topicsSummary = topicResult.summary;
+
+          // Save topics to project
+          await this.updateProject(projectId, {
+            topics: detectedTopics as any,
+            topicsSummary: topicsSummary,
+          });
+
+          console.log(`[Pipeline] Detected ${detectedTopics.length} topics`);
+        }
+      } catch (error) {
+        console.warn(`[Pipeline] Topic detection failed (non-critical):`, error);
+        // Continue pipeline even if topic detection fails
+      }
+
       // Step 2: Chunk into segments (30-60s)
       const chunkedSegments = this.chunkSegments(
         transcriptionResult.segments,
@@ -110,11 +198,14 @@ export class PodcastPipeline {
         60
       );
 
-      // Step 3: Analyze segments
+      // Step 3: Analyze segments (with diarization and topics)
       await this.updateStatus(projectId, "analyzing");
       const analyzedSegments = await this.analyzeSegments(
         chunkedSegments,
-        transcriptionResult.text
+        transcriptionResult.text,
+        diarizationResult?.segments || [],
+        speakerNames,
+        detectedTopics
       );
 
       // Step 4: Select best segments based on target duration
@@ -129,6 +220,20 @@ export class PodcastPipeline {
 
       // Step 6: Save segments to database
       await this.saveSegments(projectId, selectedSegments, orderSuggestions);
+
+      // Step 6.5: Detect filler words (ums, ahs, tipo, né)
+      try {
+        await this.updateStatus(projectId, "detecting_fillers");
+        console.log(`[Pipeline] Detecting filler words...`);
+
+        const language = (project.language === "en" ? "en" : "pt") as "pt" | "en";
+        const fillerResult = await processProjectFillers(projectId, language);
+
+        console.log(`[Pipeline] Detected ${fillerResult.stats.totalCount} filler words`);
+      } catch (error) {
+        console.warn(`[Pipeline] Filler detection failed (non-critical):`, error);
+        // Continue pipeline even if filler detection fails
+      }
 
       // Step 7: Mark as ready
       await this.updateStatus(projectId, "ready");
@@ -194,16 +299,40 @@ export class PodcastPipeline {
   }
 
   /**
-   * Analyze all segments with Claude
+   * Analyze all segments with Claude, including speaker and topic information
    */
   private async analyzeSegments(
     segments: TranscriptSegment[],
-    fullContext: string
+    fullContext: string,
+    diarizationSegments: DiarizationSegment[] = [],
+    speakerNames: Record<string, string> = {},
+    topics: TopicSegment[] = []
   ): Promise<SegmentWithAnalysis[]> {
     const analyzed: SegmentWithAnalysis[] = [];
 
     for (const segment of segments) {
       try {
+        // Find speaker for this segment using diarization
+        const segmentMid = (segment.start + segment.end) / 2;
+        let speaker: string | undefined;
+        let speakerLabel: string | undefined;
+
+        for (const diarSeg of diarizationSegments) {
+          if (diarSeg.start <= segmentMid && segmentMid <= diarSeg.end) {
+            speaker = diarSeg.speaker;
+            speakerLabel = speakerNames[diarSeg.speaker];
+            break;
+          }
+        }
+
+        // Find topic for this segment
+        let topicId: number | undefined;
+        for (const topic of topics) {
+          if (segment.start >= topic.start && segment.start < topic.end) {
+            topicId = topic.id;
+            break;
+          }
+        }
         const analysis = await this.analysis.analyzeSegment(
           segment.text,
           fullContext
@@ -216,6 +345,9 @@ export class PodcastPipeline {
           text: segment.text,
           analysis,
           wordTimestamps: segment.words,
+          speaker,
+          speakerLabel,
+          topicId,
         });
       } catch (error) {
         console.error("Error analyzing segment:", error);
@@ -227,11 +359,85 @@ export class PodcastPipeline {
           text: segment.text,
           analysis: this.getDefaultAnalysis(),
           wordTimestamps: segment.words,
+          speaker: undefined,
+          speakerLabel: undefined,
+          topicId: undefined,
         });
       }
     }
 
     return analyzed;
+  }
+
+  /**
+   * Refine word timestamps using Forced Aligner
+   * Provides ~20ms precision vs ~100-200ms from Whisper
+   */
+  private async refineWordTimestamps(
+    audioUrl: string,
+    segments: TranscriptSegment[]
+  ): Promise<TranscriptSegment[]> {
+    try {
+      console.log(`[Pipeline] Refining word timestamps for ${segments.length} segments`);
+
+      // Prepare segments for alignment
+      const segmentsForAlignment = segments.map((s) => ({
+        start: s.start,
+        end: s.end,
+        text: s.text,
+      }));
+
+      // Call the Forced Aligner service
+      const result = await this.forcedAligner.alignSegments(
+        audioUrl,
+        segmentsForAlignment,
+        "por" // Portuguese by default
+      );
+
+      if (!result.success) {
+        console.warn(`[Pipeline] Forced alignment failed: ${result.error}`);
+        console.warn(`[Pipeline] Falling back to Whisper word timestamps`);
+        return segments; // Return original segments
+      }
+
+      // Map aligned results back to TranscriptSegment format
+      const alignedSegments: TranscriptSegment[] = result.segments.map((aligned, index) => {
+        const original = segments[index];
+
+        // Convert word_timestamps to words format
+        const words: WordTimestamp[] = aligned.word_timestamps.map((wt) => ({
+          word: wt.word,
+          start: wt.start,
+          end: wt.end,
+        }));
+
+        // If alignment failed for this segment, fall back to original
+        if (aligned.alignment_error || words.length === 0) {
+          console.warn(`[Pipeline] Segment ${index} alignment failed, using Whisper timestamps`);
+          return original;
+        }
+
+        return {
+          start: original.start,
+          end: original.end,
+          text: original.text,
+          words,
+        };
+      });
+
+      // Count how many segments were successfully aligned
+      const successCount = alignedSegments.filter((s, i) =>
+        s.words && s.words.length > 0 && s.words !== segments[i].words
+      ).length;
+
+      console.log(`[Pipeline] Successfully aligned ${successCount}/${segments.length} segments`);
+
+      return alignedSegments;
+    } catch (error) {
+      console.error(`[Pipeline] Error in refineWordTimestamps:`, error);
+      console.warn(`[Pipeline] Falling back to Whisper word timestamps`);
+      return segments; // Return original segments on error
+    }
   }
 
   /**
@@ -326,6 +532,9 @@ export class PodcastPipeline {
         errorType: analysis.needsRerecord ? "needs_rerecord" : null,
         errorDetail: analysis.rerecordSuggestion || null,
         wordTimestamps: segment.wordTimestamps as any, // Word-level timestamps for text-based editing
+        speaker: segment.speaker || null,
+        speakerLabel: segment.speakerLabel || null,
+        topicId: segment.topicId || null,
       };
     });
 

@@ -7,13 +7,12 @@ import { toast } from "sonner";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { EditorChat } from "@/components/editor/EditorChat";
 import { EditorCanvas } from "@/components/editor/EditorCanvas";
-import { AdvancedTimeline, AdvancedTimelineRef, PreviewRange } from "@/components/editor/AdvancedTimeline";
+import { AdvancedTimeline, AdvancedTimelineRef, PreviewRange, TimelineMode } from "@/components/editor/AdvancedTimeline";
 import { ExportButton } from "@/components/editor/ExportButton";
 import { FillerWordPanel } from "@/components/editor/FillerWordPanel";
 import { AudioEnhancementPanel } from "@/components/editor/AudioEnhancementPanel";
-import { SocialClipsGenerator } from "@/components/editor/SocialClipsGenerator";
 import { ShowNotesPanel } from "@/components/editor/ShowNotesPanel";
-import { TranscriptEditor } from "@/components/editor/TranscriptEditor";
+import { SegmentSearch } from "@/components/editor/SegmentSearch";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -36,13 +35,13 @@ import {
   MessageSquare,
   FileText,
   Wand2,
-  Scissors,
   Volume2,
   Mic,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type SidebarPanel = "chat" | "transcript" | "fillers" | "enhance" | "clips" | "notes";
+type SidebarPanel = "chat" | "fillers" | "enhance" | "notes";
 
 interface EditorPageProps {
   params: Promise<{ id: string }>;
@@ -60,12 +59,16 @@ export default function EditorPage({ params }: EditorPageProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [previewRange, setPreviewRange] = useState<PreviewRange | undefined>(undefined);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
   const [userId, setUserId] = useState<string>("");
   const [activePanel, setActivePanel] = useState<SidebarPanel>("chat");
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | undefined>(undefined);
   const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | undefined>(undefined);
+  const [searchHighlightedSegmentIds, setSearchHighlightedSegmentIds] = useState<string[]>([]);
+  const [timelineMode, setTimelineMode] = useState<TimelineMode>("full");
 
   // Fetch user ID for chat persistence
   useEffect(() => {
@@ -85,6 +88,23 @@ export default function EditorPage({ params }: EditorPageProps) {
 
     fetchUser();
   }, []);
+
+  // Close settings menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(event.target as Node)) {
+        setShowSettingsMenu(false);
+      }
+    };
+
+    if (showSettingsMenu) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showSettingsMenu]);
 
   // Fetch project and segments
   useEffect(() => {
@@ -173,6 +193,36 @@ export default function EditorPage({ params }: EditorPageProps) {
         segmentIds.includes(seg.id) ? { ...seg, isSelected: select } : seg
       )
     );
+  };
+
+  // Handler para atualizar um segmento (text-based editing)
+  const handleUpdateSegment = async (segmentId: string, updates: Partial<Segment>) => {
+    console.log("[Editor] handleUpdateSegment called:", { segmentId, updates });
+
+    // Update local state immediately
+    setSegments((prev) =>
+      prev.map((seg) =>
+        seg.id === segmentId ? { ...seg, ...updates } : seg
+      )
+    );
+
+    // Save to API
+    try {
+      const response = await fetch(`/api/projects/${resolvedParams.id}/segments/${segmentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+
+      const result = await response.json();
+      console.log("[Editor] Segment update response:", result);
+
+      if (!response.ok) {
+        console.error("Failed to save segment updates:", result);
+      }
+    } catch (error) {
+      console.error("Error saving segment:", error);
+    }
   };
 
   // Handler para acoes do chat
@@ -264,6 +314,27 @@ export default function EditorPage({ params }: EditorPageProps) {
       setProject({ ...project, enhancedAudioUrl: enhancedUrl });
       toast.success("Audio melhorado aplicado!");
     }
+  };
+
+  // Handler para resultado de busca clicado
+  const handleSearchResultClick = (segmentId: string) => {
+    const segment = segments.find((s) => s.id === segmentId);
+    if (segment) {
+      // Destacar o segmento
+      setHighlightedSegmentId(segmentId);
+      // Ir para o tempo do segmento
+      handleSeekTo(segment.startTime);
+      // Ativar preview mode para o segmento
+      setPreviewRange({
+        segmentIds: [segmentId],
+        label: segment.topic || "Resultado da busca",
+      });
+    }
+  };
+
+  // Handler para destacar segmentos da busca
+  const handleSearchHighlight = (segmentIds: string[]) => {
+    setSearchHighlightedSegmentIds(segmentIds);
   };
 
   // Handler para atualizar tempo atual
@@ -383,7 +454,7 @@ export default function EditorPage({ params }: EditorPageProps) {
         <div className="mx-auto max-w-4xl px-4 py-8">
           <button
             onClick={() => router.push("/dashboard")}
-            className="flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8"
+            className="flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8 cursor-pointer"
           >
             <ArrowLeft className="h-4 w-4" />
             Voltar
@@ -424,18 +495,18 @@ export default function EditorPage({ params }: EditorPageProps) {
   return (
     <div className="h-screen flex flex-col bg-zinc-950 overflow-hidden">
       {/* Header */}
-      <header className="border-b border-zinc-800 bg-zinc-900/50 backdrop-blur-xl shrink-0">
+      <header className="border-b border-zinc-800 bg-zinc-900/50 backdrop-blur-xl shrink-0 relative z-[100]">
         <div className="px-4 py-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-1">
               <button
                 onClick={() => router.push("/dashboard")}
-                className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors shrink-0 cursor-pointer"
               >
                 <ArrowLeft className="h-5 w-5" />
               </button>
 
-              <div>
+              <div className="shrink-0">
                 <h1 className="text-lg font-bold text-white">
                   {project.title || "Podcast sem titulo"}
                 </h1>
@@ -473,45 +544,79 @@ export default function EditorPage({ params }: EditorPageProps) {
                   )}
                 </div>
               </div>
+
+              {/* Search Component */}
+              <div className="flex-1 max-w-md ml-4">
+                <SegmentSearch
+                  segments={segments}
+                  projectId={project.id}
+                  onResultClick={handleSearchResultClick}
+                  onHighlightSegments={handleSearchHighlight}
+                />
+              </div>
             </div>
 
             <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => router.push(`/editor/${resolvedParams.id}/template`)}
-                className="text-zinc-400 hover:text-white hover:bg-zinc-800"
-                title="Configurar template e mapeamento de seções"
-              >
-                <LayoutTemplate className="h-4 w-4" />
-                <span className="ml-2 hidden sm:inline">Mapeamento</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowShortcuts(true)}
-                className="text-zinc-400 hover:text-white hover:bg-zinc-800"
-              >
-                <Keyboard className="h-4 w-4" />
-                <span className="ml-2 hidden sm:inline">Atalhos</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleReprocess}
-                disabled={isProcessing}
-                className="text-zinc-400 hover:text-white hover:bg-zinc-800"
-              >
-                {isProcessing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4" />
+              {/* Settings Dropdown */}
+              <div className="relative" ref={settingsMenuRef}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowSettingsMenu(!showSettingsMenu)}
+                  className={cn(
+                    "text-zinc-400 hover:text-white hover:bg-zinc-800",
+                    showSettingsMenu && "bg-zinc-800 text-white"
+                  )}
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
+
+                {showSettingsMenu && (
+                  <div className="absolute right-0 top-full mt-1 w-48 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-50 py-1">
+                    <button
+                      onClick={() => {
+                        router.push(`/editor/${resolvedParams.id}/template`);
+                        setShowSettingsMenu(false);
+                      }}
+                      className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <LayoutTemplate className="h-4 w-4 text-zinc-400" />
+                      Mapeamento
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowShortcuts(true);
+                        setShowSettingsMenu(false);
+                      }}
+                      className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <Keyboard className="h-4 w-4 text-zinc-400" />
+                      Atalhos
+                    </button>
+                    <div className="border-t border-zinc-700 my-1" />
+                    <button
+                      onClick={() => {
+                        handleReprocess();
+                        setShowSettingsMenu(false);
+                      }}
+                      disabled={isProcessing}
+                      className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      {isProcessing ? (
+                        <Loader2 className="h-4 w-4 text-zinc-400 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4 text-zinc-400" />
+                      )}
+                      Reprocessar
+                    </button>
+                  </div>
                 )}
-                <span className="ml-2 hidden sm:inline">Reprocessar</span>
-              </Button>
+              </div>
+
               <ExportButton
                 projectId={project.id}
                 selectedSegmentsCount={selectedCount}
+                compact
               />
             </div>
           </div>
@@ -535,17 +640,19 @@ export default function EditorPage({ params }: EditorPageProps) {
               onPreviewClose={handlePreviewClose}
               onTimeUpdate={handleTimeUpdate}
               onPlayingChange={setIsPlaying}
+              onModeChange={setTimelineMode}
               onSegmentClick={(segmentId) => setHighlightedSegmentId(segmentId)}
+              searchHighlightedIds={searchHighlightedSegmentIds}
               className="rounded-none border-0"
             />
           </div>
 
-          {/* Canvas Area - when transcript is NOT active */}
-          {activePanel !== "transcript" && (
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <EditorCanvas
+          {/* Canvas Area */}
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <EditorCanvas
                 segments={segments}
                 isPlaying={isPlaying}
+                viewMode={timelineMode}
                 sections={(() => {
                   // Generate demo sections based on segments
                   if (segments.length === 0) return undefined;
@@ -625,25 +732,18 @@ export default function EditorPage({ params }: EditorPageProps) {
                     timelineRef.current.playSegment(segment);
                   }
                 }}
+                onPauseSegment={() => {
+                  // Pause playback
+                  if (timelineRef.current) {
+                    timelineRef.current.pause();
+                  }
+                }}
+                onUpdateSegment={handleUpdateSegment}
                 projectTitle={project.title}
                 originalDuration={project.originalDuration || 0}
                 className="h-full"
               />
-            </div>
-          )}
-
-          {/* Transcript Editor - when transcript is active */}
-          {activePanel === "transcript" && (
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <TranscriptEditor
-                segments={segments}
-                currentTime={currentTime}
-                onSeekTo={handleSeekTo}
-                onSelectSegment={handleSelectSegment}
-                className="h-full"
-              />
-            </div>
-          )}
+          </div>
         </div>
 
         {/* Right Sidebar - Tools */}
@@ -653,7 +753,7 @@ export default function EditorPage({ params }: EditorPageProps) {
             <button
               onClick={() => setActivePanel("chat")}
               className={cn(
-                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap",
+                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer",
                 activePanel === "chat"
                   ? "text-emerald-400 border-b-2 border-emerald-400"
                   : "text-zinc-500 hover:text-zinc-300"
@@ -663,21 +763,9 @@ export default function EditorPage({ params }: EditorPageProps) {
               Chat
             </button>
             <button
-              onClick={() => setActivePanel("transcript")}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap",
-                activePanel === "transcript"
-                  ? "text-blue-400 border-b-2 border-blue-400"
-                  : "text-zinc-500 hover:text-zinc-300"
-              )}
-            >
-              <FileText className="h-3.5 w-3.5" />
-              Transcricao
-            </button>
-            <button
               onClick={() => setActivePanel("fillers")}
               className={cn(
-                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap",
+                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer",
                 activePanel === "fillers"
                   ? "text-red-400 border-b-2 border-red-400"
                   : "text-zinc-500 hover:text-zinc-300"
@@ -689,7 +777,7 @@ export default function EditorPage({ params }: EditorPageProps) {
             <button
               onClick={() => setActivePanel("enhance")}
               className={cn(
-                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap",
+                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer",
                 activePanel === "enhance"
                   ? "text-purple-400 border-b-2 border-purple-400"
                   : "text-zinc-500 hover:text-zinc-300"
@@ -699,21 +787,9 @@ export default function EditorPage({ params }: EditorPageProps) {
               Audio
             </button>
             <button
-              onClick={() => setActivePanel("clips")}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap",
-                activePanel === "clips"
-                  ? "text-pink-400 border-b-2 border-pink-400"
-                  : "text-zinc-500 hover:text-zinc-300"
-              )}
-            >
-              <Scissors className="h-3.5 w-3.5" />
-              Clips
-            </button>
-            <button
               onClick={() => setActivePanel("notes")}
               className={cn(
-                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap",
+                "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer",
                 activePanel === "notes"
                   ? "text-blue-400 border-b-2 border-blue-400"
                   : "text-zinc-500 hover:text-zinc-300"
@@ -742,14 +818,6 @@ export default function EditorPage({ params }: EditorPageProps) {
               />
             )}
 
-            {activePanel === "clips" && (
-              <SocialClipsGenerator
-                projectId={project.id}
-                onPlaySegment={handleSeekTo}
-                className="h-full"
-              />
-            )}
-
             {activePanel === "notes" && (
               <ShowNotesPanel
                 projectId={project.id}
@@ -770,17 +838,6 @@ export default function EditorPage({ params }: EditorPageProps) {
               />
             )}
 
-            {/* Transcript placeholder */}
-            {activePanel === "transcript" && (
-              <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-                <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center mb-4">
-                  <FileText className="h-6 w-6 text-blue-400" />
-                </div>
-                <p className="text-sm text-zinc-400">
-                  A transcricao esta ativa na area principal
-                </p>
-              </div>
-            )}
           </div>
         </div>
       </main>

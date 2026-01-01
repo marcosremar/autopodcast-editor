@@ -54,6 +54,17 @@ export const projects = pgTable("projects", {
   // Filler words stats
   fillerWordsCount: integer("filler_words_count").default(0),
   fillerWordsRemoved: integer("filler_words_removed").default(0),
+  // Audio language for transcription
+  language: varchar("language", { length: 10 }).default("pt"), // pt, en, es
+  // Waveform data for timeline visualization
+  waveformPeaks: jsonb("waveform_peaks"), // Array of normalized amplitude values (0-1)
+  // Speaker diarization data
+  diarization: jsonb("diarization"), // Pyannote diarization result
+  speakers: jsonb("speakers"), // Array of speaker names/labels
+  speakerStats: jsonb("speaker_stats"), // Speaker statistics (time, percentage)
+  // Topic segmentation data
+  topics: jsonb("topics"), // Detected topics/chapters
+  topicsSummary: text("topics_summary"), // Overall content summary
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -67,6 +78,11 @@ export const segments = pgTable("segments", {
   startTime: real("start_time").notNull(),
   endTime: real("end_time").notNull(),
   text: text("text").notNull(),
+  // Speaker diarization
+  speaker: varchar("speaker", { length: 100 }), // SPEAKER_00, SPEAKER_01, etc
+  speakerLabel: varchar("speaker_label", { length: 255 }), // Human-readable: "Host", "Guest 1"
+  // Topic/chapter
+  topicId: integer("topic_id"), // Reference to topic index in project.topics
   interestScore: integer("interest_score"),
   clarityScore: integer("clarity_score"),
   topic: varchar("topic", { length: 255 }),
@@ -83,6 +99,9 @@ export const segments = pgTable("segments", {
   sectionMatchScore: real("section_match_score"), // 0-1 confidence score
   // Word-level timestamps for text-based editing
   wordTimestamps: jsonb("word_timestamps"), // Array of {word, start, end, confidence}
+  // Text-based editing - stores edits made to the transcript
+  editedText: text("edited_text"), // User-edited version of the text
+  textCuts: jsonb("text_cuts"), // Array of {startTime, endTime} ranges to cut from audio
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -409,6 +428,15 @@ export interface WordTimestamp {
   start: number; // seconds
   end: number; // seconds
   confidence?: number; // 0-1
+  isDeleted?: boolean; // true if user deleted this word in text-based editing
+}
+
+// Text cut range (stored in segments.textCuts)
+export interface TextCut {
+  startTime: number; // seconds
+  endTime: number; // seconds
+  deletedText: string; // the text that was deleted
+  wordIndices: number[]; // indices of deleted words in wordTimestamps
 }
 
 // Audio enhancement settings (stored in projects.enhancementSettings)

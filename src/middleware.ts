@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const protectedRoutes = ["/editor"]; // Removed /dashboard for development
-const publicRoutes = ["/", "/dashboard", "/api/waitlist"]; // Added /dashboard as public route
+const protectedRoutes: string[] = []; // All routes public for development
+const publicRoutes = ["/", "/dashboard", "/editor", "/api/waitlist"]; // Added /editor as public route
 const authRoutes = ["/api/auth/login", "/api/auth/logout", "/api/auth/me", "/api/auth/demo"];
 
 export async function middleware(request: NextRequest) {
@@ -20,8 +20,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Allow public routes
-  if (publicRoutes.some((route) => pathname === route)) {
+  // Allow public routes (exact match or startsWith for routes with subroutes)
+  if (publicRoutes.some((route) => pathname === route || pathname.startsWith(route + "/"))) {
     return NextResponse.next();
   }
 

@@ -10,6 +10,13 @@ const chatRequestSchema = z.object({
   userId: z.string().uuid(),
   message: z.string().min(1).max(5000),
   includeTemplateContext: z.boolean().optional(),
+  skipAI: z.boolean().optional(),
+  role: z.enum(["user", "assistant"]).optional(),
+  metadata: z.object({
+    type: z.string().optional(),
+    segmentId: z.string().optional(),
+    audioUrl: z.string().optional(),
+  }).optional(),
 });
 
 // Helper to detect template-related queries
@@ -309,7 +316,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { projectId, userId, message, includeTemplateContext } = result.data;
+    const { projectId, userId, message, includeTemplateContext, skipAI, role, metadata } = result.data;
+
+    // If skipAI is true, just save the message without AI processing
+    if (skipAI) {
+      await db.insert(chatMessages).values({
+        projectId,
+        userId,
+        role: role || "user",
+        content: message,
+        metadata: metadata as any,
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: "Message saved",
+      });
+    }
 
     // 1. Salvar mensagem do usuario no banco
     await db.insert(chatMessages).values({

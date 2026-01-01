@@ -11,11 +11,17 @@ export interface ExportOptions {
   channels?: number; // 1 for mono, 2 for stereo
 }
 
+export interface TextCutRange {
+  startPercent: number; // 0-1, percentage of segment duration
+  endPercent: number; // 0-1, percentage of segment duration
+}
+
 export interface SegmentExportOptions {
   inputPath: string;
   startTime: number; // seconds
   endTime: number; // seconds
   outputFormat?: 'mp3' | 'wav' | 'aac' | 'ogg';
+  textCuts?: TextCutRange[]; // Ranges to cut from this segment
 }
 
 export interface ConcatenateOptions {
@@ -37,9 +43,16 @@ export interface ExportService {
 
 export class FFmpegExportService implements ExportService {
   /**
-   * Extracts a segment from an audio file
+   * Extracts a segment from an audio file, optionally with text cuts removed
    */
   async extractSegment(options: SegmentExportOptions): Promise<Buffer> {
+    const { textCuts } = options;
+
+    // If there are text cuts, we need to extract parts and concatenate
+    if (textCuts && textCuts.length > 0) {
+      return this.extractSegmentWithCuts(options);
+    }
+
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       const stream = new PassThrough();
@@ -56,6 +69,79 @@ export class FFmpegExportService implements ExportService {
         .on('error', reject);
 
       command.pipe(stream, { end: true });
+    });
+  }
+
+  /**
+   * Extracts a segment with text cuts removed
+   * Calculates which parts to keep and concatenates them
+   */
+  private async extractSegmentWithCuts(options: SegmentExportOptions): Promise<Buffer> {
+    const { inputPath, startTime, endTime, textCuts = [], outputFormat = 'mp3' } = options;
+    const duration = endTime - startTime;
+
+    // Sort cuts by start position
+    const sortedCuts = [...textCuts].sort((a, b) => a.startPercent - b.startPercent);
+
+    // Calculate the parts to KEEP (inverse of cuts)
+    const partsToKeep: { start: number; end: number }[] = [];
+    let lastEnd = 0;
+
+    for (const cut of sortedCuts) {
+      if (cut.startPercent > lastEnd) {
+        // There's a part to keep before this cut
+        partsToKeep.push({
+          start: startTime + (lastEnd * duration),
+          end: startTime + (cut.startPercent * duration)
+        });
+      }
+      lastEnd = cut.endPercent;
+    }
+
+    // Add the final part if there's content after the last cut
+    if (lastEnd < 1) {
+      partsToKeep.push({
+        start: startTime + (lastEnd * duration),
+        end: endTime
+      });
+    }
+
+    // If no parts to keep (unlikely), return empty buffer
+    if (partsToKeep.length === 0) {
+      return Buffer.alloc(0);
+    }
+
+    // If only one part, extract it directly
+    if (partsToKeep.length === 1) {
+      const part = partsToKeep[0];
+      return new Promise((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        const stream = new PassThrough();
+
+        stream.on('data', (chunk) => chunks.push(chunk));
+        stream.on('end', () => resolve(Buffer.concat(chunks)));
+        stream.on('error', reject);
+
+        const command = ffmpeg(inputPath)
+          .setStartTime(part.start)
+          .setDuration(part.end - part.start)
+          .audioCodec(this.getCodec(outputFormat))
+          .format(outputFormat)
+          .on('error', reject);
+
+        command.pipe(stream, { end: true });
+      });
+    }
+
+    // Multiple parts - concatenate them
+    return this.concatenateSegments({
+      segments: partsToKeep.map(part => ({
+        path: inputPath,
+        startTime: part.start,
+        endTime: part.end
+      })),
+      crossfadeDuration: 0.05, // Very small crossfade for seamless cuts
+      outputFormat
     });
   }
 

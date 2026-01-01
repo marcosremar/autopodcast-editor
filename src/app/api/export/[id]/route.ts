@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, projects, segments } from "@/lib/db";
 import { eq, and, asc } from "drizzle-orm";
+import { TextCut } from "@/lib/db/schema";
 
 /**
  * POST /api/export/[id]
@@ -153,19 +154,32 @@ export async function GET(
 }
 
 /**
+ * Segment with text cuts for export
+ */
+interface SegmentWithCuts {
+  startTime: number;
+  endTime: number;
+  order: number | null;
+  textCuts?: TextCut[] | null;
+}
+
+/**
  * Generate edited audio from selected segments
- * In production, this would use FFmpeg to concatenate audio segments
+ * Applies text-based cuts to remove deleted words from audio
  */
 async function generateEditedAudio(
   originalAudioUrl: string,
-  selectedSegments: Array<{
-    startTime: number;
-    endTime: number;
-    order: number | null;
-  }>
+  selectedSegments: SegmentWithCuts[]
 ): Promise<string> {
   console.log(`[Export] Generating edited audio from ${selectedSegments.length} segments`);
   console.log(`[Export] Original audio: ${originalAudioUrl}`);
+
+  // Count total cuts
+  const totalCuts = selectedSegments.reduce(
+    (sum, seg) => sum + (seg.textCuts?.length || 0),
+    0
+  );
+  console.log(`[Export] Total text-based cuts to apply: ${totalCuts}`);
 
   // Check if FFmpeg is available
   const ffmpegAvailable = await checkFFmpegAvailable();
@@ -205,20 +219,59 @@ async function checkFFmpegAvailable(): Promise<boolean> {
 }
 
 /**
+ * Calculate sub-segments after applying text cuts
+ * Returns array of {startTime, endTime} for parts to KEEP
+ */
+function calculateSubSegments(
+  segmentStart: number,
+  segmentEnd: number,
+  textCuts: TextCut[] | null | undefined
+): Array<{ startTime: number; endTime: number }> {
+  if (!textCuts || textCuts.length === 0) {
+    // No cuts, keep the whole segment
+    return [{ startTime: segmentStart, endTime: segmentEnd }];
+  }
+
+  // Sort cuts by start time
+  const sortedCuts = [...textCuts].sort((a, b) => a.startTime - b.startTime);
+
+  const subSegments: Array<{ startTime: number; endTime: number }> = [];
+  let currentStart = segmentStart;
+
+  for (const cut of sortedCuts) {
+    // Add the part before this cut (if any)
+    if (cut.startTime > currentStart) {
+      subSegments.push({
+        startTime: currentStart,
+        endTime: Math.min(cut.startTime, segmentEnd),
+      });
+    }
+    // Move past this cut
+    currentStart = Math.max(currentStart, cut.endTime);
+  }
+
+  // Add remaining part after last cut
+  if (currentStart < segmentEnd) {
+    subSegments.push({
+      startTime: currentStart,
+      endTime: segmentEnd,
+    });
+  }
+
+  return subSegments;
+}
+
+/**
  * Generate real audio export using FFmpeg
+ * Applies text-based cuts to remove deleted words
  */
 async function generateRealExport(
   originalAudioUrl: string,
-  selectedSegments: Array<{
-    startTime: number;
-    endTime: number;
-    order: number | null;
-  }>
+  selectedSegments: SegmentWithCuts[]
 ): Promise<string> {
   const ffmpeg = (await import("fluent-ffmpeg")).default;
   const fs = await import("fs/promises");
   const path = await import("path");
-  const { promisify } = await import("util");
 
   // Resolve original audio file path
   let audioPath: string;
@@ -240,10 +293,24 @@ async function generateRealExport(
   // Generate unique filename
   const timestamp = Date.now();
   const segmentCount = selectedSegments.length;
-  const totalDuration = selectedSegments.reduce(
+
+  // Calculate all sub-segments (applying text cuts)
+  const allSubSegments: Array<{ startTime: number; endTime: number }> = [];
+  for (const segment of selectedSegments) {
+    const subSegs = calculateSubSegments(
+      segment.startTime,
+      segment.endTime,
+      segment.textCuts as TextCut[] | null
+    );
+    allSubSegments.push(...subSegs);
+  }
+
+  const totalDuration = allSubSegments.reduce(
     (sum, seg) => sum + (seg.endTime - seg.startTime),
     0
   );
+
+  console.log(`[Export] After applying cuts: ${allSubSegments.length} sub-segments, ${totalDuration.toFixed(2)}s total`);
 
   const outputFilename = `edited-${timestamp}-${segmentCount}seg-${Math.floor(totalDuration)}s.mp3`;
   const outputPath = path.join(exportsDir, outputFilename);
@@ -253,25 +320,33 @@ async function generateRealExport(
     // Create temp directory for segment files
     await fs.mkdir(tempDir, { recursive: true });
 
-    console.log(`[Export] Extracting ${segmentCount} segments...`);
+    console.log(`[Export] Extracting ${allSubSegments.length} sub-segments...`);
 
-    // Extract each segment
+    // Extract each sub-segment
     const segmentFiles: string[] = [];
-    for (let i = 0; i < selectedSegments.length; i++) {
-      const segment = selectedSegments[i];
+    for (let i = 0; i < allSubSegments.length; i++) {
+      const subSeg = allSubSegments[i];
+      const duration = subSeg.endTime - subSeg.startTime;
+
+      // Skip very short segments (less than 50ms)
+      if (duration < 0.05) {
+        console.log(`[Export] Skipping sub-segment ${i + 1} (too short: ${duration.toFixed(3)}s)`);
+        continue;
+      }
+
       const segmentPath = path.join(tempDir, `segment-${i}.mp3`);
 
       await new Promise<void>((resolve, reject) => {
         ffmpeg(audioPath)
-          .setStartTime(segment.startTime)
-          .setDuration(segment.endTime - segment.startTime)
+          .setStartTime(subSeg.startTime)
+          .setDuration(duration)
           .output(segmentPath)
           .on("end", () => {
-            console.log(`[Export] Extracted segment ${i + 1}/${segmentCount}`);
+            console.log(`[Export] Extracted sub-segment ${i + 1}/${allSubSegments.length} (${subSeg.startTime.toFixed(2)}s - ${subSeg.endTime.toFixed(2)}s)`);
             resolve();
           })
-          .on("error", (err) => {
-            console.error(`[Export] Error extracting segment ${i}:`, err);
+          .on("error", (err: Error) => {
+            console.error(`[Export] Error extracting sub-segment ${i}:`, err);
             reject(err);
           })
           .run();
@@ -280,7 +355,7 @@ async function generateRealExport(
       segmentFiles.push(segmentPath);
     }
 
-    console.log(`[Export] Concatenating ${segmentCount} segments...`);
+    console.log(`[Export] Concatenating ${segmentFiles.length} sub-segments...`);
 
     // Create concat file list
     const concatListPath = path.join(tempDir, "concat-list.txt");
@@ -330,22 +405,30 @@ async function generateRealExport(
  */
 function generateMockExport(
   originalAudioUrl: string,
-  selectedSegments: Array<{
-    startTime: number;
-    endTime: number;
-    order: number | null;
-  }>
+  selectedSegments: SegmentWithCuts[]
 ): string {
   const segmentCount = selectedSegments.length;
-  const totalDuration = selectedSegments.reduce(
-    (sum, seg) => sum + (seg.endTime - seg.startTime),
+
+  // Calculate duration after applying text cuts
+  let totalDuration = 0;
+  for (const segment of selectedSegments) {
+    const subSegs = calculateSubSegments(
+      segment.startTime,
+      segment.endTime,
+      segment.textCuts as TextCut[] | null
+    );
+    totalDuration += subSegs.reduce((sum, seg) => sum + (seg.endTime - seg.startTime), 0);
+  }
+
+  const totalCuts = selectedSegments.reduce(
+    (sum, seg) => sum + (seg.textCuts?.length || 0),
     0
   );
 
   const mockUrl = `http://localhost:3000/exports/${Date.now()}-edited-${segmentCount}segments-${Math.floor(totalDuration)}s.mp3`;
 
   console.log(`[Export] Mock export URL: ${mockUrl}`);
-  console.log(`[Export] Segments: ${segmentCount}, Duration: ${totalDuration.toFixed(2)}s`);
+  console.log(`[Export] Segments: ${segmentCount}, Text cuts: ${totalCuts}, Duration: ${totalDuration.toFixed(2)}s`);
 
   return mockUrl;
 }

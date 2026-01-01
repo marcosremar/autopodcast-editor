@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle, useMemo } from "react";
 import { motion } from "framer-motion";
 import { Segment, SegmentAnalysis } from "@/lib/db/schema";
+import { TextCut } from "./InlineTextEditor";
 import {
   Play,
   Pause,
@@ -21,6 +22,7 @@ import { cn } from "@/lib/utils";
 
 export interface AdvancedTimelineRef {
   playSegment: (segment: Segment) => void;
+  pause: () => void;
   seekToTime: (time: number) => void;
   seekTo: (time: number) => void; // Alias for seekToTime
   getCurrentTime: () => number;
@@ -47,10 +49,12 @@ interface AdvancedTimelineProps {
   onPreviewClose?: () => void;
   onTimeUpdate?: (time: number) => void;
   onPlayingChange?: (isPlaying: boolean) => void;
+  onModeChange?: (mode: TimelineMode) => void; // Notify parent when mode changes
+  searchHighlightedIds?: string[]; // Segment IDs highlighted from search
 }
 
 export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimelineProps>(
-  function AdvancedTimeline({ segments, audioUrl, waveformPeaks, onToggleSelect, onSelectRange, onUpdateSegment, onSegmentClick, className, initialMode = "full", previewRange, onPreviewClose, onTimeUpdate, onPlayingChange }, ref) {
+  function AdvancedTimeline({ segments, audioUrl, waveformPeaks, onToggleSelect, onSelectRange, onUpdateSegment, onSegmentClick, className, initialMode = "full", previewRange, onPreviewClose, onTimeUpdate, onPlayingChange, onModeChange, searchHighlightedIds = [] }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -62,6 +66,11 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
     const [hoveredSegment, setHoveredSegment] = useState<string | null>(null);
     const [mode, setMode] = useState<TimelineMode>(initialMode);
     const [previewLoop, setPreviewLoop] = useState(false); // Loop mode for preview
+
+    // Notify parent when mode changes
+    useEffect(() => {
+      onModeChange?.(mode);
+    }, [mode, onModeChange]);
 
     // Scrubbing state (dragging on ruler)
     const [isScrubbing, setIsScrubbing] = useState(false);
@@ -126,6 +135,11 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
       return previewRange.segmentIds.includes(segmentId);
     };
 
+    // Helper to check if segment is highlighted by search
+    const isSearchHighlighted = (segmentId: string): boolean => {
+      return searchHighlightedIds.includes(segmentId);
+    };
+
     const selectedSegments = segments.filter(s => s.isSelected).sort((a, b) => a.startTime - b.startTime);
 
     // Calculate dimensions
@@ -168,6 +182,11 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
         audio.currentTime = segment.startTime;
         audio.play();
       },
+      pause: () => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        audio.pause();
+      },
       seekToTime: (time: number) => {
         const audio = audioRef.current;
         if (!audio) return;
@@ -190,6 +209,27 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
         const currentTime = audio.currentTime;
         setCurrentTime(currentTime);
         onTimeUpdate?.(currentTime);
+
+        // Skip cut regions during playback (real-time audio preview)
+        // When user cuts text from a segment, skip that audio region during preview
+        for (const segment of segments) {
+          // Check if we're inside this segment's time range
+          if (currentTime >= segment.startTime && currentTime < segment.endTime) {
+            // Get textCuts for this segment
+            const textCuts = (segment.textCuts as TextCut[] | null) || [];
+
+            // Check if current time falls within any cut region
+            for (const cut of textCuts) {
+              if (currentTime >= cut.startTime && currentTime < cut.endTime) {
+                // Skip to end of cut region
+                console.log("[Timeline] Skipping cut region:", cut.startTime, "->", cut.endTime);
+                audio.currentTime = cut.endTime;
+                return; // Exit early to avoid further processing
+              }
+            }
+            break; // Found the current segment, no need to check others
+          }
+        }
 
         // Preview mode playback restrictions
         if (mode === "preview" && previewRange && previewRange.segmentIds.length > 0) {
@@ -757,6 +797,7 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                 const { left, width } = getSegmentPosition(segment, index);
                 const isHovered = hoveredSegment === segment.id;
                 const inFocus = isInPreviewFocus(segment.id);
+                const searchHighlight = isSearchHighlighted(segment.id);
 
                 return (
                   <motion.div
@@ -770,6 +811,8 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                       // Preview focus styling - dim segments not in focus
                       !inFocus && "opacity-30 grayscale",
                       inFocus && mode === "preview" && "ring-2 ring-violet-500/50 shadow-lg shadow-violet-500/20",
+                      // Search highlight styling - yellow glow for search results
+                      searchHighlight && "ring-2 ring-amber-400/70 shadow-lg shadow-amber-400/30 z-10",
                       isHovered && "ring-1 ring-white/30 shadow-md shadow-black/30 z-20"
                     )}
                     style={{
@@ -852,6 +895,46 @@ export const AdvancedTimeline = forwardRef<AdvancedTimelineRef, AdvancedTimeline
                         });
                       })()}
                     </div>
+
+                    {/* Cut Markers - Visual indicators for text cuts */}
+                    {(() => {
+                      const textCuts = (segment.textCuts as TextCut[] | null) || [];
+                      const segmentDuration = segment.endTime - segment.startTime;
+
+                      return textCuts.map((cut, cutIndex) => {
+                        // Calculate position within segment
+                        const cutStart = cut.startTime - segment.startTime;
+                        const cutEnd = cut.endTime - segment.startTime;
+                        const cutWidth = ((cutEnd - cutStart) / segmentDuration) * 100;
+                        const cutLeft = (cutStart / segmentDuration) * 100;
+
+                        return (
+                          <div
+                            key={`cut-${cutIndex}`}
+                            className="absolute top-0 h-full z-20 pointer-events-none"
+                            style={{
+                              left: `${cutLeft}%`,
+                              width: `${cutWidth}%`,
+                              minWidth: "3px",
+                            }}
+                          >
+                            {/* Cut indicator - red striped overlay */}
+                            <div
+                              className="h-full bg-red-500/30 border-l border-r border-red-500/50"
+                              style={{
+                                backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(239, 68, 68, 0.3) 2px, rgba(239, 68, 68, 0.3) 4px)",
+                              }}
+                              title={`Cortado: "${cut.deletedText}"`}
+                            />
+                            {/* Scissors icon at start of cut */}
+                            <div className="absolute -left-1.5 top-1/2 -translate-y-1/2">
+                              <Scissors className="h-3 w-3 text-red-400" />
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+
                     {/* Segment Content - Compact */}
                     <div className="relative px-1.5 py-1 h-full flex items-center overflow-hidden z-10">
                       {/* Topic Label */}

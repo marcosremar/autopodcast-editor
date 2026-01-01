@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Upload, X, FileAudio, Loader2 } from "lucide-react"
+import { Upload, X, FileAudio, Loader2, CheckCircle2 } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -13,16 +13,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Progress } from "@/components/ui/progress"
+import { cn } from "@/lib/utils"
 
 interface UploadModalProps {
   isOpen: boolean
@@ -41,6 +32,12 @@ function formatFileSize(bytes: number): string {
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i]
 }
 
+const LANGUAGES = [
+  { value: "pt", label: "Portugues", flag: "\ud83c\udde7\ud83c\uddf7" },
+  { value: "en", label: "English", flag: "\ud83c\uddfa\ud83c\uddf8" },
+  { value: "es", label: "Espanol", flag: "\ud83c\uddea\ud83c\uddf8" },
+] as const
+
 export function UploadModal({
   isOpen,
   onClose,
@@ -48,6 +45,7 @@ export function UploadModal({
 }: UploadModalProps) {
   const [file, setFile] = useState<File | null>(null)
   const [title, setTitle] = useState("")
+  const [language, setLanguage] = useState<"pt" | "en" | "es">("pt")
   const [isDragging, setIsDragging] = useState(false)
   const [error, setError] = useState("")
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -58,6 +56,7 @@ export function UploadModal({
   const resetForm = useCallback(() => {
     setFile(null)
     setTitle("")
+    setLanguage("pt")
     setError("")
     setUploadProgress(0)
     setIsUploading(false)
@@ -73,10 +72,10 @@ export function UploadModal({
 
   const validateFile = useCallback((file: File): string | null => {
     if (!ALLOWED_TYPES.includes(file.type)) {
-      return "Invalid file type. Please upload an MP3, WAV, or M4A file."
+      return "Tipo de arquivo invalido. Envie MP3, WAV ou M4A."
     }
     if (file.size > MAX_FILE_SIZE) {
-      return `File size exceeds ${formatFileSize(MAX_FILE_SIZE)}. Please upload a smaller file.`
+      return `Arquivo muito grande. Maximo ${formatFileSize(MAX_FILE_SIZE)}.`
     }
     return null
   }, [])
@@ -92,7 +91,6 @@ export function UploadModal({
       setFile(selectedFile)
       setError("")
 
-      // Auto-populate title from filename if empty
       if (!title) {
         const nameWithoutExt = selectedFile.name.replace(/\.[^/.]+$/, "")
         setTitle(nameWithoutExt)
@@ -138,7 +136,7 @@ export function UploadModal({
     e.preventDefault()
 
     if (!file || !title) {
-      setError("Please fill in all required fields")
+      setError("Preencha todos os campos obrigatorios")
       return
     }
 
@@ -149,8 +147,8 @@ export function UploadModal({
       const formData = new FormData()
       formData.append("file", file)
       formData.append("title", title)
+      formData.append("language", language)
 
-      // Simulate upload progress
       const progressInterval = setInterval(() => {
         setUploadProgress((prev) => {
           if (prev >= 90) {
@@ -176,10 +174,8 @@ export function UploadModal({
       const data = await response.json()
       const projectId = data.projectId
 
-      // Change status to processing
       setUploadStatus("processing")
 
-      // Start processing automatically
       if (projectId) {
         try {
           await fetch(`/api/process/${projectId}`, {
@@ -187,19 +183,15 @@ export function UploadModal({
           })
         } catch (err) {
           console.error("Failed to start processing:", err)
-          // Don't fail the upload if processing fails to start
         }
       }
 
-      // Mark as done
       setUploadStatus("done")
 
-      // Show success toast
-      toast.success("Upload concluído!", {
-        description: "Seu podcast está sendo processado em segundo plano.",
+      toast.success("Upload concluido!", {
+        description: "Seu podcast esta sendo processado em segundo plano.",
       })
 
-      // Success
       setTimeout(() => {
         resetForm()
         onUploadSuccess()
@@ -231,27 +223,32 @@ export function UploadModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[500px] bg-zinc-900 border-zinc-800">
         <DialogHeader>
-          <DialogTitle>Create New Project</DialogTitle>
-          <DialogDescription>
-            Upload your audio file to get started with AI-powered podcast editing.
+          <DialogTitle className="text-white">Novo Projeto</DialogTitle>
+          <DialogDescription className="text-zinc-400">
+            Envie seu arquivo de audio para comecar a editar com IA.
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-5">
           {/* File Upload Area */}
           <div>
-            <Label>Audio File *</Label>
+            <label className="text-sm font-medium text-zinc-300">
+              Arquivo de Audio *
+            </label>
             <div
-              className={`mt-2 border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+              className={cn(
+                "mt-2 border-2 border-dashed rounded-xl p-8 text-center transition-all cursor-pointer",
                 isDragging
-                  ? "border-primary bg-primary/5"
-                  : "border-muted-foreground/25"
-              } ${file ? "bg-muted/30" : ""}`}
+                  ? "border-emerald-500 bg-emerald-500/5"
+                  : "border-zinc-700 hover:border-zinc-600",
+                file && "bg-zinc-800/50"
+              )}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
+              onClick={!file ? handleBrowseClick : undefined}
             >
               <AnimatePresence mode="wait">
                 {!file ? (
@@ -261,19 +258,23 @@ export function UploadModal({
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                   >
-                    <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-                    <p className="text-sm font-medium mb-2">
-                      Drag and drop your audio file here
+                    <div className="w-14 h-14 rounded-xl bg-zinc-800 flex items-center justify-center mx-auto mb-4">
+                      <Upload className="h-7 w-7 text-zinc-500" />
+                    </div>
+                    <p className="text-sm font-medium text-white mb-1">
+                      Arraste e solte seu arquivo aqui
                     </p>
-                    <p className="text-xs text-muted-foreground mb-4">
-                      MP3, WAV, or M4A (max {formatFileSize(MAX_FILE_SIZE)})
+                    <p className="text-xs text-zinc-500 mb-4">
+                      MP3, WAV ou M4A (max {formatFileSize(MAX_FILE_SIZE)})
                     </p>
                     <Button
                       type="button"
                       variant="outline"
+                      size="sm"
                       onClick={handleBrowseClick}
+                      className="border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-white"
                     >
-                      Browse Files
+                      Procurar Arquivos
                     </Button>
                     <input
                       ref={fileInputRef}
@@ -293,25 +294,29 @@ export function UploadModal({
                     className="flex items-center justify-between"
                   >
                     <div className="flex items-center gap-3">
-                      <FileAudio className="h-8 w-8 text-primary" />
+                      <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                        <FileAudio className="h-6 w-6 text-emerald-400" />
+                      </div>
                       <div className="text-left">
-                        <p className="text-sm font-medium truncate max-w-[250px]">
+                        <p className="text-sm font-medium text-white truncate max-w-[250px]">
                           {file.name}
                         </p>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-xs text-zinc-500">
                           {formatFileSize(file.size)}
                         </p>
                       </div>
                     </div>
                     {!isUploading && (
-                      <Button
+                      <button
                         type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={handleRemoveFile}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleRemoveFile()
+                        }}
+                        className="p-2 rounded-lg hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors cursor-pointer"
                       >
                         <X className="h-4 w-4" />
-                      </Button>
+                      </button>
                     )}
                   </motion.div>
                 )}
@@ -321,17 +326,46 @@ export function UploadModal({
 
           {/* Title Input */}
           <div>
-            <Label htmlFor="title">Project Title *</Label>
-            <Input
+            <label htmlFor="title" className="text-sm font-medium text-zinc-300">
+              Titulo do Projeto *
+            </label>
+            <input
               id="title"
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Enter project title"
+              placeholder="Digite o titulo"
               disabled={isUploading}
-              className="mt-2"
+              className="mt-2 w-full h-10 px-3 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 focus:ring-1 focus:ring-zinc-600 transition-all disabled:opacity-50"
               required
             />
+          </div>
+
+          {/* Language Select */}
+          <div>
+            <label className="text-sm font-medium text-zinc-300">
+              Idioma do Audio
+            </label>
+            <div className="mt-2 flex gap-2">
+              {LANGUAGES.map((lang) => (
+                <button
+                  key={lang.value}
+                  type="button"
+                  onClick={() => setLanguage(lang.value)}
+                  disabled={isUploading}
+                  className={cn(
+                    "flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border transition-all cursor-pointer",
+                    language === lang.value
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                      : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300",
+                    isUploading && "opacity-50 cursor-not-allowed"
+                  )}
+                >
+                  <span>{lang.flag}</span>
+                  <span className="text-sm font-medium">{lang.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Upload Progress */}
@@ -339,20 +373,35 @@ export function UploadModal({
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
-              className="space-y-2"
+              className="space-y-3 p-4 rounded-xl bg-zinc-800/50 border border-zinc-700"
             >
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">
-                  {uploadStatus === "uploading" && "Uploading arquivo..."}
+                <span className="text-zinc-400 flex items-center gap-2">
+                  {uploadStatus === "done" ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                  ) : (
+                    <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+                  )}
+                  {uploadStatus === "uploading" && "Enviando arquivo..."}
                   {uploadStatus === "processing" && "Iniciando processamento..."}
-                  {uploadStatus === "done" && "Concluído!"}
+                  {uploadStatus === "done" && "Concluido!"}
                 </span>
-                <span className="font-medium">{uploadProgress}%</span>
+                <span className="font-medium text-white">{uploadProgress}%</span>
               </div>
-              <Progress value={uploadProgress} />
+              <div className="h-2 w-full bg-zinc-700 rounded-full overflow-hidden">
+                <motion.div
+                  className={cn(
+                    "h-full rounded-full",
+                    uploadStatus === "done" ? "bg-emerald-500" : "bg-blue-500"
+                  )}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${uploadProgress}%` }}
+                  transition={{ duration: 0.3 }}
+                />
+              </div>
               {uploadStatus === "processing" && (
-                <p className="text-xs text-muted-foreground">
-                  Seu podcast será transcrito e analisado em segundo plano
+                <p className="text-xs text-zinc-500">
+                  Seu podcast sera transcrito e analisado em segundo plano
                 </p>
               )}
             </motion.div>
@@ -360,33 +409,38 @@ export function UploadModal({
 
           {/* Error Message */}
           {error && (
-            <motion.p
+            <motion.div
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="text-sm text-destructive"
+              className="p-3 rounded-lg bg-red-500/10 border border-red-500/20"
             >
-              {error}
-            </motion.p>
+              <p className="text-sm text-red-400">{error}</p>
+            </motion.div>
           )}
 
           {/* Footer */}
-          <DialogFooter>
+          <DialogFooter className="gap-2">
             <Button
               type="button"
               variant="outline"
               onClick={handleClose}
               disabled={isUploading}
+              className="border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-white"
             >
-              Cancel
+              Cancelar
             </Button>
-            <Button type="submit" disabled={!file || !title || isUploading}>
+            <Button
+              type="submit"
+              disabled={!file || !title || isUploading}
+              className="bg-emerald-500 hover:bg-emerald-400 text-black font-medium"
+            >
               {isUploading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Uploading...
+                  Enviando...
                 </>
               ) : (
-                "Create Project"
+                "Criar Projeto"
               )}
             </Button>
           </DialogFooter>

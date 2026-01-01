@@ -61,22 +61,22 @@ async def test_features():
             # 4. Find and click on a project
             print("\n[4] Looking for projects...")
 
-            # Click on a project title directly - first one with "Podcast" in the name
-            project_title = page.locator('h3:has-text("Podcast")').first
-
-            if await project_title.count() > 0:
-                print(f"    Found project: clicking on title...")
-                await project_title.click()
+            # Click on a completed project from the dashboard
+            print("    Looking for completed projects...")
+            completed_project = page.locator("text=Completed").first
+            if await completed_project.count() > 0:
+                # Click on the parent card of the completed project
+                await completed_project.click()
                 await page.wait_for_load_state("networkidle")
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
+                print("    Clicked on completed project")
             else:
-                # Fallback: click on first card with Ready badge
-                ready_badge = page.locator('span:has-text("Ready"), span:has-text("Completed")').first
-                if await ready_badge.count() > 0:
-                    print("    Clicking on ready badge...")
-                    await ready_badge.click()
+                print("    No completed projects found, trying first project card...")
+                project_card = page.locator("[class*='cursor-pointer']").first
+                if await project_card.count() > 0:
+                    await project_card.click()
                     await page.wait_for_load_state("networkidle")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)
 
             await page.screenshot(path=f"{SCREENSHOT_DIR}/04_after_click.png", full_page=True)
             print(f"    Screenshot: {SCREENSHOT_DIR}/04_after_click.png")
@@ -101,6 +101,30 @@ async def test_features():
                     ("Clips", "10_clips"),
                     ("Notes", "11_notes"),
                 ]
+
+                # Special test for transcript editing
+                print("\n    Testing transcript text editing...")
+                transcript_tab = page.locator("button:has-text('Transcricao')").first
+                if await transcript_tab.count() > 0:
+                    await transcript_tab.click()
+                    await page.wait_for_timeout(1000)
+
+                    # Take initial screenshot
+                    await page.screenshot(path=f"{SCREENSHOT_DIR}/12_transcript_view.png", full_page=True)
+                    print(f"    OK - View mode: {SCREENSHOT_DIR}/12_transcript_view.png")
+
+                    # Try to double-click on a segment to enter edit mode
+                    segment_div = page.locator("[id^='segment-']").first
+                    if await segment_div.count() > 0:
+                        await segment_div.dblclick()
+                        await page.wait_for_timeout(500)
+                        await page.screenshot(path=f"{SCREENSHOT_DIR}/13_edit_mode.png", full_page=True)
+                        print(f"    OK - Edit mode (double-click): {SCREENSHOT_DIR}/13_edit_mode.png")
+
+                        # Check if textarea appeared
+                        textarea = page.locator("textarea").first
+                        if await textarea.count() > 0:
+                            print(f"    OK - Textarea found for text editing")
 
                 for tab_name, screenshot_name in tabs_to_test:
                     print(f"\n    Testing {tab_name} tab...")

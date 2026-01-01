@@ -1,0 +1,1 @@
+ALTER TABLE "projects" ADD COLUMN "language" varchar(10) DEFAULT 'pt';

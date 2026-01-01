@@ -31,6 +31,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineTextEditor, TextCut, WordTimestamp } from "@/components/editor/InlineTextEditor";
 
 // Interface for section summaries
 interface SectionSummary {
@@ -52,10 +53,13 @@ interface EditorCanvasProps {
   highlightedSegmentId?: string;
   currentTime: number;
   isPlaying?: boolean;
+  viewMode?: "full" | "edited" | "preview"; // Timeline viewing mode
   onSeekTo: (time: number) => void;
   onToggleSelect: (segmentId: string) => void;
   onSegmentClick?: (segmentId: string) => void; // For sync with timeline (no toggle)
   onPlaySegment?: (segmentId: string) => void; // Play segment from start
+  onPauseSegment?: () => void; // Pause playback
+  onUpdateSegment?: (segmentId: string, updates: Partial<Segment>) => void; // For inline editing
   projectTitle?: string;
   originalDuration?: number;
   className?: string;
@@ -88,10 +92,13 @@ export function EditorCanvas({
   highlightedSegmentId,
   currentTime,
   isPlaying = false,
+  viewMode = "full",
   onSeekTo,
   onToggleSelect,
   onSegmentClick,
   onPlaySegment,
+  onPauseSegment,
+  onUpdateSegment,
   projectTitle,
   originalDuration = 0,
   className,
@@ -147,28 +154,62 @@ export function EditorCanvas({
     return ((currentTime - currentSegment.startTime) / segmentDuration) * 100;
   }, [currentSegment, currentTime]);
 
-  // Auto-scroll to current segment when playing
-  useEffect(() => {
-    if (!currentSegment || !isPlaying) return;
+  // Track if we passed through a gap (no segment)
+  const wasInGapRef = useRef(false);
 
-    // Only scroll if this is a new segment (not continuous updates)
-    if (lastScrolledSegmentId.current === currentSegment.id) return;
+  // Detect when entering a gap
+  useEffect(() => {
+    if (!currentSegment && isPlaying) {
+      // We're in a gap while playing
+      wasInGapRef.current = true;
+    }
+  }, [currentSegment, isPlaying]);
+
+  // Auto-scroll: In "full" mode always scroll, in "edited" mode skip if came from gap
+  useEffect(() => {
+    // No segment = no scroll
+    if (!currentSegment) {
+      return;
+    }
+
+    // Same segment = no scroll
+    if (lastScrolledSegmentId.current === currentSegment.id) {
+      return;
+    }
+
+    // Check if we came from a gap
+    const cameFromGap = wasInGapRef.current;
+
+    // Update refs
     lastScrolledSegmentId.current = currentSegment.id;
+    wasInGapRef.current = false; // Reset gap flag
+
+    // In "full" mode (original), ALWAYS scroll to segment (even if excluded)
+    // In "edited" mode, don't scroll if we came from a gap
+    if (viewMode !== "full" && cameFromGap) {
+      console.log("[EditorCanvas] Not scrolling - came from gap (edited mode)");
+      return;
+    }
+
+    // Don't scroll if not playing
+    if (!isPlaying) {
+      return;
+    }
 
     const segmentElement = segmentRefs.current.get(currentSegment.id);
-    if (segmentElement && containerRef.current) {
-      // Scroll the segment into view with smooth animation
+    if (segmentElement) {
       segmentElement.scrollIntoView({
         behavior: "smooth",
         block: "center",
       });
     }
-  }, [currentSegment?.id, isPlaying]);
+  }, [currentSegment?.id, isPlaying, viewMode]);
 
-  // Reset last scrolled segment when playback stops
+  // Reset when playback stops
   useEffect(() => {
     if (!isPlaying) {
       lastScrolledSegmentId.current = null;
+      wasInGapRef.current = false;
     }
   }, [isPlaying]);
 
@@ -322,10 +363,14 @@ export function EditorCanvas({
           }}
           className={cn(
             "w-full px-6 py-4 flex items-start gap-4 hover:bg-zinc-900/80 transition-all text-left group relative z-10",
+            // Current segment playing - always highlighted
             isCurrentSegment && "bg-emerald-500/5 border-l-4 border-emerald-500 shadow-lg shadow-emerald-500/10",
+            // Highlighted from timeline click (when not current)
             isHighlightedFromTimeline && "bg-blue-500/10 border-l-4 border-blue-500 shadow-lg shadow-blue-500/10",
+            // Dim other segments when one is playing (but not current or highlighted)
             !isCurrentSegment && !isHighlightedFromTimeline && currentSegment && "opacity-50",
-            !segment.isSelected && !isHighlightedFromTimeline && "opacity-60"
+            // Dim non-selected segments (but not if it's the current segment playing)
+            !segment.isSelected && !isCurrentSegment && !isHighlightedFromTimeline && "opacity-60"
           )}
         >
           {/* Playing indicator for current segment */}
@@ -345,33 +390,36 @@ export function EditorCanvas({
             </motion.div>
           )}
 
-          {/* Segment Number / Play Button */}
+          {/* Segment Number / Play-Pause Button */}
           <div
             onClick={(e) => {
-              if (!isCurrentSegment && onPlaySegment) {
-                e.stopPropagation();
+              e.stopPropagation();
+              if (isCurrentSegment && isPlaying && onPauseSegment) {
+                // Currently playing this segment - pause it
+                onPauseSegment();
+              } else if (onPlaySegment) {
+                // Not playing or playing different segment - play this one
                 onPlaySegment(segment.id);
               }
             }}
             className={cn(
-              "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm font-semibold transition-all",
-              isCurrentSegment
-                ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/30"
+              "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm font-semibold transition-all cursor-pointer",
+              isCurrentSegment && isPlaying
+                ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 hover:bg-emerald-600"
+                : isCurrentSegment && !isPlaying
+                ? "bg-emerald-500/80 text-white shadow-lg shadow-emerald-500/30 hover:bg-emerald-500"
                 : isHighlightedFromTimeline
-                ? "bg-blue-500 text-white shadow-lg shadow-blue-500/30 cursor-pointer hover:bg-blue-600"
+                ? "bg-blue-500 text-white shadow-lg shadow-blue-500/30 hover:bg-blue-600"
                 : segment.isSelected
-                ? "bg-emerald-500/20 text-emerald-400 cursor-pointer hover:bg-emerald-500/30"
-                : "bg-zinc-800 text-zinc-500 cursor-pointer hover:bg-emerald-500 hover:text-white"
+                ? "bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-white"
+                : "bg-zinc-800 text-zinc-500 hover:bg-emerald-500 hover:text-white"
             )}
-            title={isCurrentSegment ? "Reproduzindo" : "Reproduzir segmento"}
+            title={isCurrentSegment && isPlaying ? "Pausar" : "Reproduzir segmento"}
           >
-            {isCurrentSegment ? (
-              <Volume2 className="h-4 w-4 animate-pulse" />
+            {isCurrentSegment && isPlaying ? (
+              <Pause className="h-4 w-4" />
             ) : (
-              <span className="group-hover:hidden">{globalIndex + 1}</span>
-            )}
-            {!isCurrentSegment && (
-              <Play className="h-4 w-4 hidden group-hover:block" />
+              <Play className="h-4 w-4" />
             )}
           </div>
 
@@ -403,13 +451,31 @@ export function EditorCanvas({
               )}
             </div>
 
-            {/* Text - show more lines */}
-            <p className={cn(
-              "text-sm leading-relaxed line-clamp-3 transition-colors",
-              isCurrentSegment ? "text-white" : "text-zinc-300"
-            )}>
-              {segment.text}
-            </p>
+            {/* Text - editable inline */}
+            {onUpdateSegment ? (
+              <InlineTextEditor
+                text={segment.editedText || segment.text}
+                originalText={segment.text}
+                textCuts={(segment.textCuts as TextCut[]) || []}
+                wordTimestamps={(segment.wordTimestamps as WordTimestamp[]) || []}
+                segmentStartTime={segment.startTime}
+                segmentEndTime={segment.endTime}
+                onSave={(newText, textCuts) => {
+                  onUpdateSegment(segment.id, {
+                    editedText: newText,
+                    textCuts: textCuts as unknown as Record<string, unknown>
+                  });
+                }}
+                isCurrentSegment={isCurrentSegment}
+              />
+            ) : (
+              <p className={cn(
+                "text-sm leading-relaxed line-clamp-3 transition-colors",
+                isCurrentSegment ? "text-white" : "text-zinc-300"
+              )}>
+                {segment.editedText || segment.text}
+              </p>
+            )}
 
             {/* Progress bar within segment */}
             {isCurrentSegment && (
@@ -445,7 +511,7 @@ export function EditorCanvas({
 
           {/* Status indicator - clickable for toggle */}
           <div className="flex items-center gap-2 shrink-0">
-            {isCurrentSegment ? (
+            {isCurrentSegment && isPlaying ? (
               <div className="flex items-center gap-2">
                 <div className="flex gap-0.5">
                   {[0, 1, 2].map((i) => (
@@ -456,9 +522,9 @@ export function EditorCanvas({
                         height: [12, 20, 12],
                       }}
                       transition={{
-                        duration: 0.5,
+                        duration: 1.5,
                         repeat: Infinity,
-                        delay: i * 0.15,
+                        delay: i * 0.3,
                       }}
                     />
                   ))}
@@ -501,23 +567,27 @@ export function EditorCanvas({
           >
             <div className="px-6 py-2 flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <div className="flex gap-0.5">
-                  {[0, 1, 2].map((i) => (
-                    <motion.div
-                      key={i}
-                      className="w-0.5 bg-emerald-500 rounded-full"
-                      animate={{
-                        height: [8, 16, 8],
-                      }}
-                      transition={{
-                        duration: 0.5,
-                        repeat: Infinity,
-                        delay: i * 0.15,
-                      }}
-                    />
-                  ))}
-                </div>
-                <span className="text-xs font-medium text-emerald-400">Reproduzindo</span>
+                {isPlaying && (
+                  <div className="flex gap-0.5">
+                    {[0, 1, 2].map((i) => (
+                      <motion.div
+                        key={i}
+                        className="w-0.5 bg-emerald-500 rounded-full"
+                        animate={{
+                          height: [8, 16, 8],
+                        }}
+                        transition={{
+                          duration: 1.5,
+                          repeat: Infinity,
+                          delay: i * 0.3,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+                <span className="text-xs font-medium text-emerald-400">
+                  {isPlaying ? "Reproduzindo" : "Pausado"}
+                </span>
               </div>
               <span className="text-sm text-white font-medium truncate flex-1">
                 {currentSegment.topic || `Segmento ${segments.indexOf(currentSegment) + 1}`}

@@ -27,6 +27,7 @@ export async function POST(request: NextRequest) {
     const title = formData.get("title") as string | null;
     const userId = formData.get("userId") as string | null;
     const targetDuration = formData.get("targetDuration") as string | null;
+    const language = (formData.get("language") as string | null) || "pt";
 
     // Validate file
     if (!file) {
@@ -88,6 +89,10 @@ export async function POST(request: NextRequest) {
     // Upload to S3 (or local storage for MVP)
     const audioUrl = await uploadAudioFile(buffer, file.name, file.type);
 
+    // Validate language
+    const validLanguages = ["pt", "en", "es"];
+    const validatedLanguage = validLanguages.includes(language) ? language : "pt";
+
     // Create project in database
     const newProject = await db
       .insert(projects)
@@ -98,6 +103,7 @@ export async function POST(request: NextRequest) {
         originalAudioUrl: audioUrl,
         originalDuration,
         targetDuration: targetDuration ? parseInt(targetDuration, 10) : null,
+        language: validatedLanguage,
       })
       .returning();
 

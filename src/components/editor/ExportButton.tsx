@@ -12,6 +12,7 @@ interface ExportButtonProps {
   selectedSegmentsCount: number;
   disabled?: boolean;
   className?: string;
+  compact?: boolean;
 }
 
 type ExportStatus = "idle" | "processing" | "ready" | "error";
@@ -21,6 +22,7 @@ export function ExportButton({
   selectedSegmentsCount,
   disabled = false,
   className,
+  compact = false,
 }: ExportButtonProps) {
   const [status, setStatus] = useState<ExportStatus>("idle");
   const [progress, setProgress] = useState(0);
@@ -117,6 +119,43 @@ export function ExportButton({
     setDownloadUrl(null);
     setErrorMessage(null);
   };
+
+  // Compact mode - just an icon button for the header
+  if (compact) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={status === "ready" ? handleDownload : startExport}
+        disabled={isDisabled || status === "processing"}
+        className={cn(
+          "text-zinc-400 hover:text-white hover:bg-zinc-800",
+          status === "ready" && "text-emerald-400",
+          status === "error" && "text-red-400",
+          className
+        )}
+        title={
+          status === "processing"
+            ? `Exportando... ${Math.round(progress)}%`
+            : status === "ready"
+            ? "Download pronto"
+            : status === "error"
+            ? "Erro na exportação - Clique para tentar novamente"
+            : `Exportar (${selectedSegmentsCount} segmentos)`
+        }
+      >
+        {status === "processing" ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : status === "ready" ? (
+          <CheckCircle2 className="h-4 w-4" />
+        ) : status === "error" ? (
+          <AlertCircle className="h-4 w-4" />
+        ) : (
+          <Download className="h-4 w-4" />
+        )}
+      </Button>
+    );
+  }
 
   return (
     <div className={cn("space-y-3", className)}>

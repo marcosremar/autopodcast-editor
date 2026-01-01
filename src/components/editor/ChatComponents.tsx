@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
   CheckCircle2,
@@ -8,11 +9,13 @@ import {
   Wand2,
   Mic,
   Play,
+  Pause,
   Download,
   LayoutTemplate,
   Clock,
   TrendingUp,
   ChevronRight,
+  Volume2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -390,6 +393,238 @@ export function GapAnalysisCard({
             )}
           </div>
         ))}
+      </div>
+    </motion.div>
+  );
+}
+
+// Recording Preview Card - Shows transcription and section options
+export function RecordingPreviewCard({
+  transcription,
+  duration,
+  topic,
+  segmentId,
+  audioUrl,
+  sections,
+  onInsert,
+  onDiscard,
+}: {
+  transcription: string;
+  duration: number;
+  topic?: string;
+  segmentId: string;
+  audioUrl?: string;
+  sections: { id: string; name: string; status: string; isRequired?: boolean }[];
+  onInsert: (sectionId: string) => void;
+  onDiscard: () => void;
+}) {
+  const [selectedSection, setSelectedSection] = useState<string | null>(null);
+  const [isInserting, setIsInserting] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
+
+  const handlePlayPause = () => {
+    if (!audioUrl) return;
+
+    if (isPlaying) {
+      audioRef.current?.pause();
+      setIsPlaying(false);
+    } else {
+      if (!audioRef.current) {
+        audioRef.current = new Audio(audioUrl);
+        audioRef.current.onended = () => {
+          setIsPlaying(false);
+          setCurrentTime(0);
+        };
+        audioRef.current.ontimeupdate = () => {
+          if (audioRef.current) {
+            setCurrentTime(audioRef.current.currentTime);
+          }
+        };
+      }
+      audioRef.current.play();
+      setIsPlaying(true);
+    }
+  };
+
+  const handleInsert = async () => {
+    if (!selectedSection) return;
+    setIsInserting(true);
+    await onInsert(selectedSection);
+    setIsInserting(false);
+  };
+
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-zinc-800/80 rounded-xl border border-emerald-500/30 overflow-hidden my-3"
+    >
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-zinc-700 bg-emerald-500/10">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Mic className="h-4 w-4 text-emerald-400" />
+            <span className="text-sm font-medium text-emerald-400">Audio Gravado</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Clock className="h-3 w-3 text-zinc-500" />
+            <span className="text-xs text-zinc-400">{formatTime(duration)}</span>
+          </div>
+        </div>
+        {topic && (
+          <span className="inline-block mt-1 text-xs px-2 py-0.5 bg-zinc-700 text-zinc-300 rounded">
+            {topic}
+          </span>
+        )}
+      </div>
+
+      {/* Audio Player */}
+      {audioUrl && (
+        <div className="px-4 py-2 border-b border-zinc-700/50 bg-zinc-900/50">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handlePlayPause}
+              className="shrink-0 p-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-white transition-colors"
+            >
+              {isPlaying ? (
+                <Pause className="h-4 w-4" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+            </button>
+
+            {/* Progress bar */}
+            <div className="flex-1 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+
+            {/* Time display */}
+            <span className="text-xs text-zinc-400 font-mono min-w-[40px] text-right">
+              {formatTime(Math.floor(currentTime))}
+            </span>
+
+            {/* Audio icon indicator */}
+            {isPlaying && (
+              <div className="flex gap-0.5 items-center h-4">
+                {[0, 1, 2].map((i) => (
+                  <motion.div
+                    key={i}
+                    className="w-0.5 bg-emerald-400 rounded-full"
+                    animate={{ height: [4, 12, 4] }}
+                    transition={{ duration: 0.6, repeat: Infinity, delay: i * 0.1 }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Transcription Preview */}
+      <div className="px-4 py-3">
+        <p className="text-sm text-zinc-300 leading-relaxed line-clamp-3">
+          "{transcription}"
+        </p>
+      </div>
+
+      {/* Section Selection */}
+      <div className="px-4 py-3 border-t border-zinc-700">
+        <p className="text-xs text-zinc-500 mb-2">Onde inserir este audio?</p>
+        <div className="space-y-1.5 max-h-40 overflow-y-auto">
+          {sections.map((section) => (
+            <button
+              key={section.id}
+              onClick={() => setSelectedSection(section.id)}
+              className={cn(
+                "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-sm transition-all",
+                selectedSection === section.id
+                  ? "bg-emerald-500/20 border border-emerald-500/50 text-emerald-300"
+                  : "bg-zinc-700/50 hover:bg-zinc-700 text-zinc-300 border border-transparent"
+              )}
+            >
+              <div className="flex-1 flex items-center gap-2">
+                {section.status === "complete" && <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
+                {section.status === "partial" && <AlertTriangle className="h-3 w-3 text-yellow-400" />}
+                {section.status === "empty" && <XCircle className="h-3 w-3 text-red-400" />}
+                <span>{section.name}</span>
+              </div>
+              {section.isRequired && (
+                <span className="text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded">
+                  Obrig.
+                </span>
+              )}
+              {selectedSection === section.id && (
+                <ChevronRight className="h-4 w-4 text-emerald-400" />
+              )}
+            </button>
+          ))}
+
+          {/* Option to add to end without specific section */}
+          <button
+            onClick={() => setSelectedSection("__end__")}
+            className={cn(
+              "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-sm transition-all",
+              selectedSection === "__end__"
+                ? "bg-blue-500/20 border border-blue-500/50 text-blue-300"
+                : "bg-zinc-700/50 hover:bg-zinc-700 text-zinc-400 border border-transparent"
+            )}
+          >
+            <span>Adicionar ao final (sem secao especifica)</span>
+            {selectedSection === "__end__" && (
+              <ChevronRight className="h-4 w-4 text-blue-400" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="px-4 py-3 border-t border-zinc-700 flex gap-2">
+        <button
+          onClick={onDiscard}
+          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-sm transition-colors"
+        >
+          <XCircle className="h-4 w-4" />
+          Descartar
+        </button>
+        <button
+          onClick={handleInsert}
+          disabled={!selectedSection || isInserting}
+          className={cn(
+            "flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors",
+            selectedSection
+              ? "bg-emerald-500 hover:bg-emerald-400 text-white"
+              : "bg-zinc-700 text-zinc-500 cursor-not-allowed"
+          )}
+        >
+          {isInserting ? (
+            <>
+              <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              Inserindo...
+            </>
+          ) : (
+            <>
+              <CheckCircle2 className="h-4 w-4" />
+              Inserir
+            </>
+          )}
+        </button>
       </div>
     </motion.div>
   );

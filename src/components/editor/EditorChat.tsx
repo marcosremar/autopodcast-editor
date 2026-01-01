@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -29,9 +30,28 @@ import {
   SectionDetailCard,
   GapAnalysisCard,
   MiniTimeline,
+  RecordingPreviewCard,
   type TemplateSection,
   type QuickAction,
 } from "./ChatComponents";
+import { AudioRecorder } from "./AudioRecorder";
+
+// Pending recording data
+interface PendingRecording {
+  segmentId: string;
+  text: string;
+  topic?: string;
+  duration: number;
+  audioUrl?: string;
+}
+
+// Section data for selection
+interface SectionOption {
+  id: string;
+  name: string;
+  status: string;
+  isRequired?: boolean;
+}
 
 // Extended action types for agent-first interface
 interface EditAction {
@@ -64,6 +84,7 @@ interface EditorChatProps {
   isOpen: boolean;
   onToggle: () => void;
   inline?: boolean;
+  onSegmentAdded?: () => void; // Called when a new segment is added via recording
   // Template data for agent-first UI
   templateData?: {
     name: string;
@@ -79,12 +100,16 @@ export function EditorChat({
   isOpen,
   onToggle,
   inline = false,
+  onSegmentAdded,
   templateData,
 }: EditorChatProps) {
+  const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
+  const [pendingRecording, setPendingRecording] = useState<PendingRecording | null>(null);
+  const [sections, setSections] = useState<SectionOption[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -152,6 +177,161 @@ export function EditorChat({
     loadChatHistory();
   }, [projectId]);
 
+  // Fetch sections from API
+  const fetchSections = async () => {
+    try {
+      const response = await fetch(`/api/projects/${projectId}/sections`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.sections) {
+          setSections(data.sections.map((s: any) => ({
+            id: s.id,
+            name: s.name || s.templateSection?.name || "Secao",
+            status: s.status || "empty",
+            isRequired: s.templateSection?.isRequired,
+          })));
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching sections:", error);
+    }
+  };
+
+  // Handle recording processed - show preview with section options
+  const handleRecordingProcessed = async (result: PendingRecording) => {
+    // Fetch sections first
+    await fetchSections();
+
+    // Set pending recording to show preview card
+    setPendingRecording(result);
+
+    // Add a message about the recording
+    const recordMessage: ChatMessage = {
+      role: "assistant",
+      content: `Audio gravado com sucesso! Transcricao:\n\n"${result.text.substring(0, 200)}${result.text.length > 200 ? "..." : ""}"`,
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, recordMessage]);
+  };
+
+  // Persist a message to the chat API
+  const persistMessage = async (message: ChatMessage) => {
+    try {
+      await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          userId,
+          message: message.content,
+          role: message.role,
+          skipAI: true, // Don't process with AI, just save
+          metadata: {
+            type: message.role === "user" ? "recording" : "system",
+            segmentId: (message as any).segmentId,
+            audioUrl: (message as any).audioUrl,
+          },
+        }),
+      });
+    } catch (error) {
+      console.error("Error persisting message:", error);
+    }
+  };
+
+  // Handle insert recording into section
+  const handleInsertRecording = async (sectionId: string) => {
+    if (!pendingRecording) return;
+
+    try {
+      let sectionName = "final do projeto";
+
+      // If sectionId is "__end__", just notify without assigning to section
+      if (sectionId !== "__end__") {
+        // Assign segment to section via API
+        const response = await fetch(`/api/projects/${projectId}/sections/${sectionId}/segments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            segmentId: pendingRecording.segmentId,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to assign segment to section");
+        }
+
+        sectionName = sections.find(s => s.id === sectionId)?.name || "secao";
+      }
+
+      toast.success(`Audio inserido na secao "${sectionName}"!`);
+
+      // Add user message showing the recording was submitted
+      const userRecordingMessage: ChatMessage = {
+        role: "user",
+        content: `Gravei um audio de ${formatTime(pendingRecording.duration)}:\n"${pendingRecording.text.substring(0, 150)}${pendingRecording.text.length > 150 ? "..." : ""}"`,
+        timestamp: new Date(),
+      };
+
+      // Add confirmation message with segment info
+      const confirmMessage: ChatMessage = {
+        role: "assistant",
+        content: `Audio inserido na secao **${sectionName}**! O segmento esta destacado na timeline.`,
+        actions: [
+          {
+            type: "focus",
+            segmentIds: [pendingRecording.segmentId],
+            message: `Ver segmento na timeline`,
+          },
+        ],
+        timestamp: new Date(),
+      };
+
+      setMessages(prev => [...prev, userRecordingMessage, confirmMessage]);
+
+      // Persist both messages
+      await persistMessage(userRecordingMessage);
+      await persistMessage(confirmMessage);
+
+      setPendingRecording(null);
+      onSegmentAdded?.();
+
+      // Auto-focus on the new segment
+      onAction({
+        type: "focus",
+        segmentIds: [pendingRecording.segmentId],
+        message: `Focar no segmento gravado`,
+      });
+
+    } catch (error) {
+      console.error("Error inserting recording:", error);
+      toast.error("Erro ao inserir audio na secao");
+    }
+  };
+
+  // Format time helper
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  // Handle discard recording
+  const handleDiscardRecording = async () => {
+    if (!pendingRecording) return;
+
+    try {
+      // Delete the segment via API
+      await fetch(`/api/segments/${pendingRecording.segmentId}`, {
+        method: "DELETE",
+      });
+    } catch (error) {
+      console.error("Error deleting segment:", error);
+    }
+
+    setPendingRecording(null);
+    toast.info("Gravacao descartada");
+  };
+
   const handleQuickAction = async (actionId: string) => {
     // Handle quick actions from buttons
     switch (actionId) {
@@ -166,6 +346,9 @@ export function EditorChat({
         break;
       case "record":
         toast.info("Funcao de gravacao em desenvolvimento");
+        break;
+      case "choose_template":
+        router.push(`/editor/${projectId}/template`);
         break;
       default:
         // Execute as regular action
@@ -554,6 +737,20 @@ export function EditorChat({
               </motion.div>
             )}
 
+            {/* Pending Recording Preview Card */}
+            {pendingRecording && (
+              <RecordingPreviewCard
+                transcription={pendingRecording.text}
+                duration={pendingRecording.duration}
+                topic={pendingRecording.topic}
+                segmentId={pendingRecording.segmentId}
+                audioUrl={pendingRecording.audioUrl}
+                sections={sections}
+                onInsert={handleInsertRecording}
+                onDiscard={handleDiscardRecording}
+              />
+            )}
+
             <div ref={messagesEndRef} />
           </div>
 
@@ -581,6 +778,12 @@ export function EditorChat({
           {/* Input */}
           <div className="p-4 border-t border-zinc-800 bg-zinc-900/95 backdrop-blur-xl">
             <div className="flex gap-2">
+              {/* Audio Recorder */}
+              <AudioRecorder
+                projectId={projectId}
+                onRecordingProcessed={handleRecordingProcessed}
+              />
+
               <input
                 ref={inputRef}
                 type="text"

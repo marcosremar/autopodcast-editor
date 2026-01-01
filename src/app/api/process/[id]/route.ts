@@ -5,6 +5,7 @@ import Groq from "groq-sdk";
 import * as fs from "fs";
 import * as path from "path";
 import { aiCompleteJSON } from "@/lib/ai/AIService";
+import { getForcedAlignerService } from "@/lib/audio/forced-aligner";
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
@@ -96,7 +97,8 @@ export async function POST(
     }
 
     // Start processing in background
-    processInBackground(id, project.originalAudioUrl);
+    const projectLanguage = project.language || "pt";
+    processInBackground(id, project.originalAudioUrl, projectLanguage);
 
     return NextResponse.json({
       message: "Processing started",
@@ -115,8 +117,12 @@ export async function POST(
 /**
  * Process the pipeline in the background
  */
-async function processInBackground(projectId: string, audioUrl: string) {
+async function processInBackground(projectId: string, audioUrl: string, language: string = "pt") {
   const groq = new Groq({ apiKey: GROQ_API_KEY });
+
+  // Determine which transcription service to use
+  const useCrisperWhisper = process.env.USE_CRISPER_WHISPER === "true";
+  console.log(`[Pipeline] Using ${useCrisperWhisper ? 'CrisperWhisper' : 'Groq Whisper'} for transcription, language: ${language}`);
 
   try {
     console.log(`[Pipeline] Starting processing for project ${projectId}`);
@@ -129,8 +135,61 @@ async function processInBackground(projectId: string, audioUrl: string) {
 
     // 1. Transcribe audio
     console.log(`[Pipeline] Transcribing audio...`);
-    const transcription = await transcribeAudio(groq, audioUrl);
+    let transcription: TranscriptionSegment[];
+    let detectedFillers: Array<{ word: string; start: number; end: number; confidence: number }> = [];
+
+    if (useCrisperWhisper) {
+      // Use CrisperWhisper for verbatim transcription with filler detection
+      const { transcribeFromUrl, transcribeFromBase64 } = await import("@/services/crisper-whisper");
+
+      let crisperResult;
+
+      if (audioUrl.startsWith('http')) {
+        // External URL - pass directly
+        crisperResult = await transcribeFromUrl(audioUrl, language as "pt" | "en" | "es");
+      } else {
+        // Local file - read and send as base64
+        const relativePath = audioUrl.startsWith('/') ? audioUrl.slice(1) : audioUrl;
+        const filePath = path.join(process.cwd(), 'public', relativePath);
+
+        if (!fs.existsSync(filePath)) {
+          throw new Error(`Audio file not found: ${filePath}`);
+        }
+
+        const audioBuffer = fs.readFileSync(filePath);
+        const audioBase64 = audioBuffer.toString('base64');
+        console.log(`[Pipeline] Sending audio to CrisperWhisper: ${audioBuffer.length} bytes`);
+
+        crisperResult = await transcribeFromBase64(audioBase64, language as "pt" | "en" | "es");
+      }
+
+      if (!crisperResult.success) {
+        throw new Error(`CrisperWhisper transcription failed: ${crisperResult.error}`);
+      }
+
+      // Convert CrisperWhisper segments to pipeline format
+      transcription = (crisperResult.segments || []).map((seg, idx) => ({
+        start: seg.start,
+        end: seg.end,
+        text: seg.text,
+        words: seg.words?.map(w => ({
+          word: w.word,
+          start: w.start,
+          end: w.end,
+        })),
+      }));
+
+      // Store detected fillers for later use
+      detectedFillers = crisperResult.fillers || [];
+      console.log(`[Pipeline] CrisperWhisper detected ${detectedFillers.length} filler words`);
+    } else {
+      // Use Groq Whisper
+      transcription = await transcribeAudio(groq, audioUrl, language);
+    }
     console.log(`[Pipeline] Transcription complete: ${transcription.length} segments`);
+
+    // Calculate duration
+    const audioDuration = Math.ceil(transcription[transcription.length - 1]?.end || 0);
 
     // Update project with transcription text
     const fullText = transcription.map(s => s.text).join(" ");
@@ -138,12 +197,97 @@ async function processInBackground(projectId: string, audioUrl: string) {
       .update(projects)
       .set({
         transcription: fullText,
-        originalDuration: Math.ceil(transcription[transcription.length - 1]?.end || 0),
-        status: "analyzing",
-        progress: 30,
+        originalDuration: audioDuration,
+        status: "aligning",
+        progress: 20,
         updatedAt: new Date(),
       })
       .where(eq(projects.id, projectId));
+
+    // 1.5. Refine word timestamps with Forced Aligner (~20ms precision vs ~100-200ms from Whisper)
+    console.log(`[Pipeline] Refining word timestamps with Forced Aligner...`);
+    try {
+      const forcedAligner = getForcedAlignerService();
+
+      // Read audio file directly and convert to base64
+      let audioBase64: string | null = null;
+      if (!audioUrl.startsWith('http')) {
+        const relativePath = audioUrl.startsWith('/') ? audioUrl.slice(1) : audioUrl;
+        const filePath = path.join(process.cwd(), 'public', relativePath);
+        if (fs.existsSync(filePath)) {
+          const audioBuffer = fs.readFileSync(filePath);
+          audioBase64 = audioBuffer.toString('base64');
+          console.log(`[Pipeline] Read audio file: ${filePath}, size: ${audioBuffer.length} bytes`);
+        }
+      }
+
+      // Use file:// URL with base64 data for the aligner
+      const absoluteAudioUrl = audioBase64
+        ? `data:audio/mpeg;base64,${audioBase64}`
+        : (audioUrl.startsWith('http') ? audioUrl : `http://localhost:3000${audioUrl}`);
+
+      const alignmentResult = await forcedAligner.alignSegments(
+        absoluteAudioUrl,
+        transcription.map(s => ({ start: s.start, end: s.end, text: s.text })),
+        "por"
+      );
+
+      if (alignmentResult.success) {
+        // Update transcription with precise word timestamps
+        transcription = transcription.map((seg, idx) => {
+          const aligned = alignmentResult.segments[idx];
+          if (aligned && aligned.word_timestamps && aligned.word_timestamps.length > 0) {
+            return {
+              ...seg,
+              words: aligned.word_timestamps.map(wt => ({
+                word: wt.word,
+                start: wt.start,
+                end: wt.end,
+              })),
+            };
+          }
+          return seg;
+        });
+        console.log(`[Pipeline] Forced alignment complete: ${alignmentResult.segments.length} segments refined`);
+      } else {
+        console.warn(`[Pipeline] Forced alignment failed: ${alignmentResult.error}`);
+        console.warn(`[Pipeline] Falling back to Whisper word timestamps`);
+      }
+    } catch (alignError) {
+      console.warn(`[Pipeline] Forced alignment error (non-critical):`, alignError);
+      console.warn(`[Pipeline] Falling back to Whisper word timestamps`);
+    }
+
+    // Update status to analyzing
+    await db
+      .update(projects)
+      .set({
+        status: "analyzing",
+        progress: 25,
+        updatedAt: new Date(),
+      })
+      .where(eq(projects.id, projectId));
+
+    // 1.6. Extract waveform peaks (for timeline visualization)
+    console.log(`[Pipeline] Extracting waveform peaks...`);
+    try {
+      const { extractWaveformPeaks } = await import("@/lib/audio/waveform");
+      const waveformData = await extractWaveformPeaks(audioUrl, audioDuration);
+      console.log(`[Pipeline] Waveform extracted: ${waveformData.peaks.length} peaks`);
+
+      // Save waveform peaks to project
+      await db
+        .update(projects)
+        .set({
+          waveformPeaks: waveformData.peaks as any,
+          progress: 30,
+          updatedAt: new Date(),
+        })
+        .where(eq(projects.id, projectId));
+    } catch (waveformError) {
+      console.warn(`[Pipeline] Waveform extraction failed (non-critical):`, waveformError);
+      // Continue pipeline even if waveform extraction fails
+    }
 
     // 2. Analyze segments
     console.log(`[Pipeline] Analyzing segments...`);
@@ -226,14 +370,24 @@ async function processInBackground(projectId: string, audioUrl: string) {
     // 6. Detect filler words
     console.log(`[Pipeline] Detecting filler words...`);
     try {
-      const { processProjectFillers } = await import("@/lib/audio/filler-detection");
-      const fillerResult = await processProjectFillers(projectId);
-      console.log(`[Pipeline] Detected ${fillerResult.stats.totalCount} filler words`);
+      let fillerCount = 0;
+
+      if (useCrisperWhisper && detectedFillers.length > 0) {
+        // Use fillers already detected by CrisperWhisper
+        fillerCount = detectedFillers.length;
+        console.log(`[Pipeline] Using ${fillerCount} fillers from CrisperWhisper`);
+      } else {
+        // Fall back to text-based detection
+        const { processProjectFillers } = await import("@/lib/audio/filler-detection");
+        const fillerResult = await processProjectFillers(projectId);
+        fillerCount = fillerResult.stats.totalCount;
+        console.log(`[Pipeline] Detected ${fillerCount} filler words via text matching`);
+      }
 
       // Update filler count in project
       await db
         .update(projects)
-        .set({ fillerWordsCount: fillerResult.stats.totalCount, updatedAt: new Date() })
+        .set({ fillerWordsCount: fillerCount, updatedAt: new Date() })
         .where(eq(projects.id, projectId));
     } catch (fillerError) {
       console.warn(`[Pipeline] Filler detection failed (non-critical):`, fillerError);
@@ -279,7 +433,7 @@ async function processInBackground(projectId: string, audioUrl: string) {
 /**
  * Transcribe audio using Groq Whisper
  */
-async function transcribeAudio(groq: Groq, audioUrl: string): Promise<TranscriptionSegment[]> {
+async function transcribeAudio(groq: Groq, audioUrl: string, language: string = "pt"): Promise<TranscriptionSegment[]> {
   // If it's a local file path, read it
   let audioData: Buffer;
 
@@ -308,7 +462,7 @@ async function transcribeAudio(groq: Groq, audioUrl: string): Promise<Transcript
     file: new File([new Uint8Array(audioData)], "audio.mp3", { type: "audio/mpeg" }),
     model: "whisper-large-v3",
     response_format: "verbose_json",
-    language: "pt",
+    language: language,
     timestamp_granularities: ["word", "segment"], // Enable word-level timestamps
   });
 

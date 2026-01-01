@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState, useEffect, useImperativeHandle, forwardRef } from "react";
+import { useRef, useState, useEffect, useImperativeHandle, forwardRef, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Segment } from "@/lib/db/schema";
+import { Segment, TextCut } from "@/lib/db/schema";
 import {
   Play,
   Pause,
@@ -49,8 +49,13 @@ export const CompactPlayer = forwardRef<CompactPlayerRef, CompactPlayerProps>(
       ? Math.max(...segments.map((s) => s.endTime))
       : 0;
 
+    // Calculate edited duration accounting for text cuts
     const editedDuration = selectedSegments.reduce(
-      (sum, seg) => sum + (seg.endTime - seg.startTime),
+      (sum, seg) => {
+        const cuts = (seg.textCuts as TextCut[]) || [];
+        const cutDuration = cuts.reduce((s, c) => s + (c.endTime - c.startTime), 0);
+        return sum + (seg.endTime - seg.startTime) - cutDuration;
+      },
       0
     );
 
@@ -64,6 +69,31 @@ export const CompactPlayer = forwardRef<CompactPlayerRef, CompactPlayerProps>(
       return `${mins}:${secs.toString().padStart(2, "0")}`;
     };
 
+    // Get textCuts from a segment
+    const getTextCuts = useCallback((segment: Segment): TextCut[] => {
+      return (segment.textCuts as TextCut[]) || [];
+    }, []);
+
+    // Check if current time is inside a text cut and return the end time of that cut
+    const checkAndSkipTextCuts = useCallback((time: number, segment: Segment, audio: HTMLAudioElement): boolean => {
+      const cuts = getTextCuts(segment);
+      for (const cut of cuts) {
+        // If current time is within a cut range, skip to end of cut
+        if (time >= cut.startTime && time < cut.endTime) {
+          audio.currentTime = cut.endTime;
+          return true;
+        }
+      }
+      return false;
+    }, [getTextCuts]);
+
+    // Calculate effective segment duration (excluding text cuts)
+    const getEffectiveDuration = useCallback((segment: Segment): number => {
+      const cuts = getTextCuts(segment);
+      const totalCutDuration = cuts.reduce((sum, cut) => sum + (cut.endTime - cut.startTime), 0);
+      return (segment.endTime - segment.startTime) - totalCutDuration;
+    }, [getTextCuts]);
+
     // Expose methods to parent
     useImperativeHandle(ref, () => ({
       playSegment: (segment: Segment) => {
@@ -72,13 +102,25 @@ export const CompactPlayer = forwardRef<CompactPlayerRef, CompactPlayerProps>(
         audio.currentTime = segment.startTime;
         audio.play();
 
-        const stopAtEnd = () => {
-          if (audio.currentTime >= segment.endTime) {
+        const cuts = getTextCuts(segment);
+        const handleSegmentTimeUpdate = () => {
+          const time = audio.currentTime;
+
+          // Skip over any text cuts
+          for (const cut of cuts) {
+            if (time >= cut.startTime && time < cut.endTime) {
+              audio.currentTime = cut.endTime;
+              return;
+            }
+          }
+
+          // Stop at end of segment
+          if (time >= segment.endTime) {
             audio.pause();
-            audio.removeEventListener("timeupdate", stopAtEnd);
+            audio.removeEventListener("timeupdate", handleSegmentTimeUpdate);
           }
         };
-        audio.addEventListener("timeupdate", stopAtEnd);
+        audio.addEventListener("timeupdate", handleSegmentTimeUpdate);
       },
       playFromStart: () => {
         const audio = audioRef.current;
@@ -106,6 +148,11 @@ export const CompactPlayer = forwardRef<CompactPlayerRef, CompactPlayerProps>(
 
         const currentSeg = selectedSegments[editedSegmentIndex];
         if (currentSeg) {
+          // Check if we're inside a text cut and skip it
+          if (checkAndSkipTextCuts(time, currentSeg, audio)) {
+            return; // Will trigger another timeupdate after seeking
+          }
+
           if (time >= currentSeg.endTime) {
             const nextIndex = editedSegmentIndex + 1;
             if (nextIndex < selectedSegments.length) {
@@ -118,11 +165,22 @@ export const CompactPlayer = forwardRef<CompactPlayerRef, CompactPlayerProps>(
               setEditedTime(0);
             }
           } else if (time >= currentSeg.startTime) {
+            // Calculate elapsed time, accounting for text cuts
             let elapsed = 0;
             for (let i = 0; i < editedSegmentIndex; i++) {
-              elapsed += selectedSegments[i].endTime - selectedSegments[i].startTime;
+              elapsed += getEffectiveDuration(selectedSegments[i]);
             }
-            elapsed += time - currentSeg.startTime;
+
+            // For current segment, calculate time excluding cuts
+            const cuts = getTextCuts(currentSeg);
+            let timeInSegment = time - currentSeg.startTime;
+            for (const cut of cuts) {
+              if (time > cut.endTime) {
+                // We've passed this cut entirely, subtract its duration
+                timeInSegment -= (cut.endTime - cut.startTime);
+              }
+            }
+            elapsed += Math.max(0, timeInSegment);
             setEditedTime(elapsed);
           }
         }
@@ -150,7 +208,7 @@ export const CompactPlayer = forwardRef<CompactPlayerRef, CompactPlayerProps>(
         audio.removeEventListener("play", handlePlay);
         audio.removeEventListener("pause", handlePause);
       };
-    }, [selectedSegments, editedSegmentIndex]);
+    }, [selectedSegments, editedSegmentIndex, checkAndSkipTextCuts, getTextCuts, getEffectiveDuration]);
 
     const togglePlay = () => {
       const audio = audioRef.current;

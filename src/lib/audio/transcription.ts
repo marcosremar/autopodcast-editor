@@ -1,10 +1,21 @@
 import Replicate from 'replicate';
 import Groq from 'groq-sdk';
+import {
+  transcribeFromUrl as crisperWhisperTranscribe,
+  type CrisperWhisperResult,
+  type DetectedFiller
+} from '@/services/crisper-whisper';
+import {
+  transcribeWithDeepgram,
+  isDeepgramConfigured,
+  type DeepgramResult,
+} from '@/services/deepgram';
 
 export interface WordTimestamp {
   word: string;
   start: number;
   end: number;
+  is_filler?: boolean;
 }
 
 export interface TranscriptionSegment {
@@ -20,6 +31,8 @@ export interface TranscriptionResult {
   segments: TranscriptionSegment[];
   language?: string;
   duration?: number;
+  fillers?: DetectedFiller[];
+  filler_count?: number;
 }
 
 export interface TranscriptionOptions {
@@ -249,6 +262,134 @@ export class GroqTranscriptionService implements TranscriptionService {
   }
 }
 
+/**
+ * CrisperWhisper Transcription Service
+ * Uses CrisperWhisper for verbatim transcription with filler detection
+ * Provides better filler word detection than standard Whisper
+ */
+export class CrisperWhisperTranscriptionService implements TranscriptionService {
+  private language: "pt" | "en" | "es";
+
+  constructor(language: "pt" | "en" | "es" = "pt") {
+    this.language = language;
+  }
+
+  async transcribe(options: TranscriptionOptions): Promise<TranscriptionResult> {
+    try {
+      console.log('[CrisperWhisper] Starting transcription...');
+
+      // Map language codes to CrisperWhisper format
+      const langMap: Record<string, "pt" | "en" | "es"> = {
+        'pt': 'pt',
+        'pt-BR': 'pt',
+        'portuguese': 'pt',
+        'en': 'en',
+        'english': 'en',
+        'es': 'es',
+        'spanish': 'es',
+      };
+
+      const language = options.language
+        ? langMap[options.language] || this.language
+        : this.language;
+
+      const result = await crisperWhisperTranscribe(options.audioUrl, language);
+
+      if (!result.success) {
+        throw new Error(result.error || 'CrisperWhisper transcription failed');
+      }
+
+      // Convert CrisperWhisper segments to TranscriptionSegment format
+      const segments: TranscriptionSegment[] = (result.segments || []).map((segment, index) => ({
+        id: index,
+        start: segment.start,
+        end: segment.end,
+        text: segment.text,
+        words: segment.words?.map(w => ({
+          word: w.word,
+          start: w.start,
+          end: w.end,
+          is_filler: w.is_filler,
+        })),
+      }));
+
+      console.log(`[CrisperWhisper] Transcription complete: ${result.filler_count || 0} fillers detected`);
+
+      return {
+        text: result.text || '',
+        segments,
+        language: result.language,
+        duration: result.duration,
+        fillers: result.fillers,
+        filler_count: result.filler_count,
+      };
+    } catch (error) {
+      console.error('[CrisperWhisper] Error:', error);
+      throw new Error(`CrisperWhisper transcription failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+}
+
+/**
+ * Deepgram Transcription Service
+ * Uses Deepgram Nova for transcription with native filler detection
+ * Supports Portuguese, English, Spanish and many other languages
+ * Has filler_words=true parameter for automatic filler detection
+ */
+export class DeepgramTranscriptionService implements TranscriptionService {
+  private language: string;
+
+  constructor(language: string = 'pt-BR') {
+    this.language = language;
+  }
+
+  async transcribe(options: TranscriptionOptions): Promise<TranscriptionResult> {
+    try {
+      console.log('[Deepgram] Starting transcription...');
+
+      const language = options.language || this.language;
+
+      const result = await transcribeWithDeepgram(options.audioUrl, {
+        language,
+        detectFillers: true,
+        model: 'nova-2',
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || 'Deepgram transcription failed');
+      }
+
+      // Convert Deepgram segments to TranscriptionSegment format
+      const segments: TranscriptionSegment[] = (result.segments || []).map((segment, index) => ({
+        id: index,
+        start: segment.start,
+        end: segment.end,
+        text: segment.text,
+        words: segment.words?.map(w => ({
+          word: w.word,
+          start: w.start,
+          end: w.end,
+          is_filler: result.fillers?.some(f => f.start === w.start && f.end === w.end),
+        })),
+      }));
+
+      console.log(`[Deepgram] Transcription complete: ${result.filler_count || 0} fillers detected`);
+
+      return {
+        text: result.text || '',
+        segments,
+        language: result.language,
+        duration: result.duration,
+        fillers: result.fillers,
+        filler_count: result.filler_count,
+      };
+    } catch (error) {
+      console.error('[Deepgram] Error:', error);
+      throw new Error(`Deepgram transcription failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+}
+
 export class MockTranscriptionService implements TranscriptionService {
   private delay: number;
 
@@ -299,9 +440,35 @@ export class MockTranscriptionService implements TranscriptionService {
 }
 
 // Factory function to create transcription service
-export function createTranscriptionService(useMock = false): TranscriptionService {
+export function createTranscriptionService(useMock = false, language?: string): TranscriptionService {
   if (useMock) {
     return new MockTranscriptionService(1000); // 1 second delay for testing
+  }
+
+  // Priority order:
+  // 1. Deepgram (best for filler detection in Portuguese/Spanish/English)
+  // 2. CrisperWhisper (only for English/German)
+  // 3. Groq Whisper (fast, cheap, no native filler detection)
+  // 4. Replicate Whisper (fallback)
+
+  // Check if Deepgram is configured (preferred for filler detection)
+  const useDeepgram = process.env.USE_DEEPGRAM === 'true';
+  if (useDeepgram && isDeepgramConfigured()) {
+    console.log('[Transcription] Using Deepgram Nova (with native filler detection)');
+    return new DeepgramTranscriptionService(language || 'pt-BR');
+  }
+
+  // Check if CrisperWhisper is enabled (only for English/German)
+  const useCrisperWhisper = process.env.USE_CRISPER_WHISPER === 'true';
+  if (useCrisperWhisper) {
+    // CrisperWhisper only supports EN/DE
+    const lang = language?.toLowerCase().split('-')[0] || 'en';
+    if (lang === 'en' || lang === 'de') {
+      console.log('[Transcription] Using CrisperWhisper (verbatim transcription with filler detection)');
+      return new CrisperWhisperTranscriptionService(lang as "pt" | "en" | "es");
+    } else {
+      console.log('[Transcription] CrisperWhisper enabled but language not supported, falling back...');
+    }
   }
 
   // Prefer Groq over Replicate (faster and cheaper)
@@ -318,4 +485,9 @@ export function createTranscriptionService(useMock = false): TranscriptionServic
   }
 
   throw new Error('Missing GROQ_API_KEY or REPLICATE_API_TOKEN environment variable');
+}
+
+// Create CrisperWhisper service specifically for filler detection
+export function createCrisperWhisperService(language: "pt" | "en" | "es" = "pt"): CrisperWhisperTranscriptionService {
+  return new CrisperWhisperTranscriptionService(language);
 }
